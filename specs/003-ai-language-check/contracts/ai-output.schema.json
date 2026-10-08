@@ -1,0 +1,43 @@
+{
+  "$comment": "Response schema sent to BOTH providers (Claude output_config.format, Gemini response_json_schema). One response per batch of items.",
+  "type": "object",
+  "properties": {
+    "assumed_language": {
+      "type": "string",
+      "description": "The language the content was judged as, e.g. 'Hindi' or 'English (India)' for 'IndianEnglish'."
+    },
+    "can_judge": {
+      "type": "boolean",
+      "description": "false if the language is not known well enough to review reliably."
+    },
+    "note": {
+      "type": "string",
+      "description": "Short explanation when can_judge is false; otherwise empty."
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "IDs of the input lines this warning applies to."
+          },
+          "category": {
+            "type": "string",
+            "enum": ["misspelled_word", "foreign_letter", "bad_sentence", "recording_mismatch"]
+          },
+          "text": { "type": "string", "description": "The text exactly as written in the sheet." },
+          "suggestion": { "type": "string", "description": "The corrected text, or empty if none." },
+          "reason": { "type": "string", "description": "One short sentence for the content team." },
+          "confidence": { "type": "string", "enum": ["high", "medium", "low"] }
+        },
+        "required": ["item_ids", "category", "text", "suggestion", "reason", "confidence"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["assumed_language", "can_judge", "note", "warnings"],
+  "additionalProperties": false
+}

@@ -1,0 +1,10 @@
+# Python dependencies for language_automation/ (install: python -m pip install -r requirements.txt)
+# System packages (not pip): ffmpeg on PATH
+streamlit==1.64.0
+requests==2.32.5
+google-api-python-client==2.187.0
+google-auth==2.41.1
+google-auth-oauthlib==1.2.3   # Google sign-in (credentials.json → token.json)
+# AI language check (ai_language_check.py): only the provider chosen in config.json is imported
+google-genai==2.28.0          # Gemini (default)
+anthropic==1.9.0              # Claude

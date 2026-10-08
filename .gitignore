@@ -1,0 +1,41 @@
+# Secrets: OAuth client, cached token, keys
+credentials.json
+token.json
+client_secret*.json
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# AI language check: cached results of earlier checks
+.ai_cache/
+
+# Generated language data (JSON + hundreds of mp3s)
+lang/
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Logs and scratch output
+*.log
+*.tmp
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code: per-machine settings (keep .claude/skills/ tracked for spec-kit)
+.claude/settings.local.json
