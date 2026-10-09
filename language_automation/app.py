@@ -14,6 +14,7 @@ from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 import ai_providers
 import lang_paths
+import web_signin
 from check_unused_audio import SPELLING_VARIANTS
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +36,8 @@ STEPS = [
     ("🧹 Checking unused audios", "Step 6/7 · Remove unused audio files", False),
     ("🔍 Checking for missing audios", "Step 7/7 · Check for missing audio files", False),
 ]
-# Google sign-in (credentials.json / token.json) runs first; steps are only shown once it succeeds
+# The pipeline prints this once it has checked this run's Google sign-in (web_signin.py);
+# steps are only shown after it
 AUTH_DONE = "✅ Authenticated as "
 MISSING_HEADER = "❌ Missing audio files:"
 DONE_MARKER = "🚀 All steps completed successfully"
@@ -48,7 +50,7 @@ AUDIO_FILE_DONE = re.compile(
 AUDIO_TOTAL = re.compile(r"^(?:🎵 Total audio files found: |🔗 Found )(\d+)")
 REFRESH_SECONDS = 0.2
 # A Google sign-in nobody completes (tab closed) would otherwise block the run forever
-SIGNIN_TIMEOUT_SECONDS = 180
+SIGNIN_TIMEOUT_SECONDS = web_signin.SIGNIN_TIMEOUT_SECONDS
 SIGNIN_PROMPT = "Please visit this URL to authorize"
 # STEPS index of "Prepare a clean language folder": before it, nothing on disk was touched
 WIPE_STEP = 1
@@ -62,10 +64,77 @@ def session_is_open():
     return Runtime.instance().is_active_session(ctx.session_id)
 
 
+def session_alive(session_id):
+    """True while the browser tab of that Streamlit session is still connected."""
+    return Runtime.exists() and Runtime.instance().is_active_session(session_id)
+
+
 @st.cache_resource
 def pipeline_lock():
-    # One run at a time: every run wipes lang/<language>/ and shares token.json.
+    # One run at a time: every run wipes lang/<language>/.
     return threading.Lock()
+
+
+def wait_for_signin(auth_box):
+    """
+    Web Google sign-in for this page session (spec 005). Shows the sign-in button and waits for
+    the sign-in tab's outcome. Returns ("success", None), ("error", reason) or ("cancelled", reason).
+    On success the sign-in is kept in st.session_state.google_signin, never on disk.
+    """
+    session_id = get_script_run_ctx().session_id
+    state, nonce, url = web_signin.start_signin(SIGNIN_CONFIG, session_id)
+    secure = "; Secure" if SIGNIN_CONFIG["redirect_uri"].startswith("https://") else ""
+    with auth_box.container():
+        st.warning(
+            "🔐 Authentication in progress: please sign in with your Curious Learning Google account. "
+            "The sign-in opens in a new tab. "
+            f"The run is cancelled if sign-in isn't completed within {SIGNIN_TIMEOUT_SECONDS // 60} minutes."
+        )
+        st.link_button("Sign in with Google", url, type="primary")
+        # Ties the sign-in to this browser (fixed script; the nonce is URL-safe random text)
+        st.html(f"<script>document.cookie = '{web_signin.COOKIE_NAME}={nonce}; Path=/; "
+                f"SameSite=Lax; Max-Age=600{secure}';</script>", unsafe_allow_javascript=True)
+
+    started = time.monotonic()
+    try:
+        while True:
+            current = web_signin.get_status(state)
+            if current in web_signin.FINAL:
+                break
+            if current == "expired" or time.monotonic() - started > SIGNIN_TIMEOUT_SECONDS:
+                return "cancelled", "Google sign-in wasn't completed"
+            if not session_is_open():
+                return "cancelled", "The browser tab was closed"
+            time.sleep(REFRESH_SECONDS)
+
+        entry = web_signin.pop_result(state, session_id)
+        if not entry:
+            return "error", web_signin.REASON_FAILED
+        if entry["status"] != "success":
+            st.session_state.pop("google_signin", None)
+            return "error", entry["reason"]
+        st.session_state.google_signin = {
+            "email": entry["email"],
+            "info": entry["credentials_info"],
+            "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        return "success", None
+    finally:
+        web_signin.discard(state)  # no-op once popped; drops an abandoned request
+
+
+def render_signin_callback():
+    """The sign-in tab Google redirected to: finish the sign-in, say where to go next, draw nothing else."""
+    st.title("🌍 Feed the Monster · Language Generator")
+    if SIGNIN_CONFIG is None:
+        st.error(f"Google sign-in isn't set up on this server: {SIGNIN_SETUP_ERROR}.")
+    else:
+        params = {key: st.query_params.get(key) for key in ("state", "code", "error")}
+        kind, message = web_signin.handle_callback(
+            SIGNIN_CONFIG, params, st.context.cookies.get(web_signin.COOKIE_NAME), session_alive)
+        (st.success if kind == "success" else st.error)(message)
+    st.query_params.clear()  # a reload must not replay the code
+    st.stop()
 
 
 def standard_spelling(text):
@@ -188,7 +257,8 @@ def run_pipeline(lang, after=None):
                 ui["note"] = ("info", f"⏳ {label}")
                 status.update(label=f"**{lang}** · {label}", expanded=True)
 
-        # Google OAuth: token.json is missing/expired and a browser sign-in is waiting
+        # Desktop sign-in prompt of the command-line flow (google_auth, token.json). The page itself
+        # signs in with web_signin before the pipeline starts, so this only appears if that changes.
         if ui["signin_since"] and not stripped.startswith(SIGNIN_PROMPT):
             ui["signin_since"] = None  # the pipeline moved on, so sign-in completed
         if stripped.startswith(SIGNIN_PROMPT):
@@ -253,7 +323,38 @@ def run_pipeline(lang, after=None):
         if stripped.startswith(DONE_MARKER):
             ui["note"] = ("success", "✅ All steps completed.")
 
-    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+    def stop_before_run(outcome, reason):
+        """Sign-in didn't succeed: the pipeline never starts, so nothing was created or deleted."""
+        if outcome == "cancelled":
+            result["state"] = "cancelled"
+            text = f"⏹️ Authentication cancelled: {reason}. Nothing was created or deleted."
+            ui["auth"] = ("warning", text)
+            label = "Cancelled"
+        else:
+            result["state"] = "error"
+            text = f"❌ Authentication failed: {reason}. Nothing was created or deleted."
+            ui["auth"] = ("error", text)
+            result["errors"].append(text)
+            errors_box.error(text)
+            label = "Authentication failed"
+        result["log"].append(text)
+        render()
+        status.update(label=f"**{lang}** · {label}", state="error", expanded=True)
+        with status:
+            render_summary(result)
+        return result
+
+    # 🔐 Web Google sign-in (spec 005): once per page session, before anything else runs
+    if not st.session_state.get("google_signin"):
+        outcome, reason = wait_for_signin(auth_box)
+        if outcome != "success":
+            return stop_before_run(outcome, reason)
+    signin = st.session_state.google_signin
+    result["account"] = signin["email"]
+
+    # This run's Google access goes to the pipeline only (never to the AI check, never to disk)
+    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8",
+               FTM_GOOGLE_CREDENTIALS=json.dumps(signin["info"]))
     proc = subprocess.Popen(
         [sys.executable, "-u", PIPELINE, lang],
         cwd=APP_DIR,
@@ -329,7 +430,9 @@ def run_pipeline(lang, after=None):
         render_steps(final_state="error")
         status.update(label=f"**{lang}** · Cancelled", state="error", expanded=True)
     elif not result["authenticated"]:
-        # Sign-in failed or wasn't a Curious Learning account: the pipeline stopped before Step 1
+        # The pipeline refused this sign-in (expired, revoked, or not a Curious Learning account):
+        # it stopped before Step 1. Forget it so the next Generate asks Google again.
+        st.session_state.pop("google_signin", None)
         result["state"] = "error"
         ui["auth"] = ("error", "❌ Authentication failed. Nothing was created or deleted.")
         if not result["errors"]:
@@ -670,19 +773,33 @@ def show_run(res, expanded):
 
 
 st.set_page_config(page_title="FTM Language Generator", page_icon="🌍")
+
+# Web Google sign-in settings (spec 005). Missing or invalid: nothing can be generated (fail closed).
+try:
+    SIGNIN_CONFIG, SIGNIN_SETUP_ERROR = web_signin.load_client_config(), None
+except web_signin.SetupError as e:
+    SIGNIN_CONFIG, SIGNIN_SETUP_ERROR = None, str(e)
+
+# This tab is Google returning from a sign-in: finish it here and draw nothing else
+if "code" in st.query_params or "error" in st.query_params:
+    render_signin_callback()
+
 st.title("🌍 Feed the Monster · Language Generator")
 st.caption(
     "Fetches the language sheet, game JSON and audio files from Google Drive into "
     "`lang/<language>/`, then checks for unused and missing audios. "
-    "You'll be asked to sign in with your Curious Learning Google account when you press Generate."
+    "When you press Generate, you'll be asked to sign in with your Curious Learning Google account "
+    "in a new tab (once per page visit)."
 )
+if SIGNIN_CONFIG is None:
+    st.error(f"Google sign-in isn't set up on this server: {SIGNIN_SETUP_ERROR}. No language can be generated.")
 
 for key, default in (("history", []), ("lang_input", ""), ("last_batch", 0)):
     st.session_state.setdefault(key, default)
 
 pending_langs = st.session_state.get("queue")
 other_run = pipeline_lock().locked() and not pending_langs  # someone else (another tab/user) is generating
-busy = bool(pending_langs) or other_run
+busy = bool(pending_langs) or other_run or SIGNIN_CONFIG is None
 
 with st.form("generate", clear_on_submit=True):  # empty the input after every Generate
     st.text_input(
@@ -714,7 +831,9 @@ if st.session_state.get("confirm") and not busy:
     confirm_regenerate(st.session_state.confirm)
 
 new_runs = 0
-if pending_langs:
+if pending_langs and SIGNIN_CONFIG is None:
+    st.session_state.queue = None  # never start a run without the sign-in settings (FR-011)
+elif pending_langs:
     lock = pipeline_lock()
     if not lock.acquire(blocking=False):
         st.warning("⏳ Another language is being generated right now. Please try again when it finishes.")

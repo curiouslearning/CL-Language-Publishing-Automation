@@ -8,6 +8,11 @@
 records the pipeline. It collects the page behaviours that were requested and built during
 2026-10-05 and 2026-10-06 without their own spec.
 
+> **2026-10-09:** the page's sign-in is now the per-session web flow of spec 005
+> (`005-web-google-signin`): a "Sign in with Google" button opens Google in a new tab. The
+> `token.json` flow remains for the command line only. The page flow described here is otherwise
+> unchanged.
+
 **Input**: User requests, in order:
 - "show 'Authentication in progress'… if success show success and then show steps";
 - "if the user closes the tab, cancel the process";

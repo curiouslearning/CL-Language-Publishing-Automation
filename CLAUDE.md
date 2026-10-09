@@ -13,6 +13,7 @@ Spec-driven workflow (GitHub spec-kit, `/speckit-*` commands): project rules are
 - `002-google-domain-login`: curiouslearning.org-only sign-in. Revised to use the existing `credentials.json` flow; the Streamlit login was removed.
 - `003-ai-language-check`: the optional AI review.
 - `004-generator-page-flow`: the web page as built (authentication display, one click per run, cancellation, regenerate prompt, Add another language).
+- `005-web-google-signin`: per-person web Google sign-in for the page (curiouslearning.org only). Hosting is out of scope; the user handles it separately.
 
 ## Running the pipeline
 
@@ -35,15 +36,23 @@ What you need installed: `python -m pip install -r requirements.txt` and `ffmpeg
 
 ### Google sign-in
 
-There is no separate login. The pipeline's own OAuth flow is the only authentication.
-- **The flow:** a browser sign-in uses `credentials.json` and caches the result in `token.json`. It runs on the machine running the scripts or `app.py`. Delete `token.json` to re-auth.
-- **Scopes:** `fetch_lang_sheet.py` and `fetch_drive_audios.py` ask for different scopes but share this token.
-- **Domain check:** `generate_language.authenticate()` runs first and prints `🔐 Authenticating with Google...`. It asks Drive which account signed in (`about.user.emailAddress`). Anything that isn't `@curiouslearning.org` is refused: it deletes `token.json` and exits 1 before Step 1. On success it prints `✅ Authenticated as <email>`.
+There is no separate login page. Sign-in happens when Generate is pressed (web page) or when a script starts (command line). Every Google client in the scripts comes from `google_auth.load_credentials()`, which resolves in this order:
+1. **`FTM_GOOGLE_CREDENTIALS`** (JSON, set by `app.py` for the pipeline subprocess only): the web page's sign-in for this run. Used as granted, refreshed in memory, never written to disk. Invalid → `AuthError`.
+2. **`FTM_HOSTED=1`** without it → refused ("no Google sign-in was provided for this run"). A server never falls back to `token.json`. This feature only defines the switch; the separate hosting work sets it.
+3. **Command line:** `token.json`, refreshed if expired, else the desktop flow with `credentials.json` (`CLI_SCOPES` = drive + spreadsheets.readonly, exactly what `token.json` was always granted; asking for more on refresh fails with `invalid_scope`). Delete `token.json` to re-auth.
+
+- **Web page (`web_signin.py`):** a **Web application** OAuth client in the dedicated Google Cloud project `ftm-language-generator` (Internal audience), read from `language_automation/client_secret_web.json` (gitignored; override with `FTM_OAUTH_CLIENT_FILE`). Redirect URI `FTM_PUBLIC_URL`, default `http://localhost:8501/`. Missing or invalid config → the page shows a setup error and disables Generate (fails closed).
+  - Generate in a page session that isn't signed in → **Sign in with Google** button (new tab), PKCE, `prompt="select_account consent"`, `access_type=offline`.
+  - Google returns to the app with `?state&code`; `app.py` runs **callback mode** in that tab only (`render_signin_callback`, then `st.stop()`). `handle_callback` checks the request is known, pending, under 3 min old, from the same browser (`ftm_signin` cookie vs nonce), and that the generator tab is still open; exchanges the code; verifies the ID token.
+  - **Admission:** `email_verified is True` **and** `hd == "curiouslearning.org"` **and** the email ends with `@curiouslearning.org`. Anything else is refused.
+  - The outcome sits in a process-wide pending store (`st.cache_resource`) until the generator tab pops it, once. The sign-in then lives only in that tab's `st.session_state.google_signin` (gone on reload, tab close or restart); later runs in the same tab don't ask again. Only the email is stored in a run (`result["account"]`).
+  - The pending store and the one-run lock are in-process: the generator must run as a single process.
+- **Domain re-check:** `generate_language.authenticate()` still runs first and prints `🔐 Authenticating with Google...`. It asks Drive which account signed in (`about.user.emailAddress`). Anything that isn't `@curiouslearning.org` is refused and exits 1 before Step 1 (it deletes `token.json` only on the command line). On success it prints `✅ Authenticated as <email>`.
 
 ### Web UI (`app.py`)
 
-- **On Generate:** the run's box shows only "Authentication in progress" (plus the sign-in link when Google asks). The steps and the log appear only after the `✅ Authenticated as` line.
-- **On failure:** if sign-in fails or is refused, the box says "Authentication failed", with no steps.
+- **On Generate:** the run's box shows only "Authentication in progress" plus a **Sign in with Google** button (first run in a page session only). The pipeline subprocess starts only after the web sign-in succeeded; the steps and the log appear only after its `✅ Authenticated as` line.
+- **On failure:** if sign-in is refused or fails, the box says "❌ Authentication failed: <reason>. Nothing was created or deleted.", with no steps, and the pipeline never starts. An unfinished sign-in (3 min) or a closed tab gives "⏹️ Authentication cancelled". Remaining queued languages aren't started.
 - **One click per run:**
   - Generate goes through `on_generate`, which validates and queues the run, and the form clears on submit.
   - The input and the Generate button are **disabled** while a run is queued or running, or while another tab or user holds the lock.
@@ -103,7 +112,8 @@ The Streamlit UI (`app.py`) parses the `🗑 Deleted:`, `🔍 Look-alike:`, `❌
 ## Secrets: read before committing
 
 `.gitignore` excludes these. Keep it that way.
-- `credentials.json`, an OAuth *desktop* client.
+- `credentials.json`, an OAuth *desktop* client (command line).
+- `client_secret*.json`, including `language_automation/client_secret_web.json`, the *web* OAuth client for the page.
 - `token.json`, which holds a refresh token with full Drive scope.
 - `.env` anywhere (AI API keys, in `language_automation/.env`), except `.env.example`; and `language_automation/.ai_cache/`.
 - `.venv/`, the generated `lang/` data and `.claude/settings.local.json`.

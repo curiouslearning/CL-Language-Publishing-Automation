@@ -1,18 +1,3 @@
-from googleapiclient.discovery import build
-import re
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-
-def get_sheets_service():
-    flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-    creds = flow.run_local_server(port=0)
-
-    service = build('sheets', 'v4', credentials=creds)
-    return service
-
-
 def read_unity_url_from_sheet(sheets_service,sheet_id):
     try:
         sheet = sheets_service.spreadsheets().get(

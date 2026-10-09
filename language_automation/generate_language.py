@@ -2,6 +2,7 @@ import os
 import sys
 import shutil
 
+import google_auth
 import lang_paths
 from fetch_lang_sheet import fetch_language_sheet, get_services, find_language_sheet
 from fetch_drive_audios import (
@@ -15,25 +16,29 @@ ALLOWED_DOMAIN = "curiouslearning.org"
 
 
 # -------------------------------------------
-# 🔐 Google sign-in (credentials.json → token.json), before anything else.
+# 🔐 Google sign-in, before anything else (google_auth: the web page's sign-in for this run,
+#    or token.json on the command line).
 #    app.py shows "Authentication in progress" until "✅ Authenticated as" is printed.
 # -------------------------------------------
 def authenticate():
     print("🔐 Authenticating with Google...")
 
-    services = get_services()
-    if not services:
-        print("❌ Authentication failed: Google service init failed.")
+    def failed(reason):
+        print(f"❌ Authentication failed: {reason}")
         print("❌ Nothing was created or deleted.")
         sys.exit(1)
+
+    services = get_services()
+    if not services:
+        failed("Google service init failed.")
     drive_service, _ = services
-    get_drive_service()  # audio download scope, same token.json
 
     email = drive_service.about().get(fields="user(emailAddress)").execute()["user"]["emailAddress"]
     if not email.lower().endswith("@" + ALLOWED_DOMAIN):
-        # Forget this account so the next run asks for sign-in again
-        if os.path.exists("token.json"):
-            os.remove("token.json")
+        # Command line only: forget this account so the next run asks for sign-in again.
+        # A web sign-in was never written to disk, so there is nothing to forget.
+        if google_auth.uses_token_file() and os.path.exists(google_auth.TOKEN_FILE):
+            os.remove(google_auth.TOKEN_FILE)
         print(f"❌ Only Curious Learning ({ALLOWED_DOMAIN}) accounts can generate languages. Signed in as {email}.")
         print("❌ Nothing was created or deleted.")
         sys.exit(1)

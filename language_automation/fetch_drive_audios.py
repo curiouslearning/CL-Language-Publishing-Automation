@@ -6,30 +6,18 @@ import json
 import subprocess
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 
+import google_auth
 import lang_paths
 
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 ROOT_FOLDER_ID = "1ObyoMA9MoTjgMbldRJWDun1wajJ78zRu"
 
 
 # ------------------------------------------------------------
-# AUTH
+# AUTH (google_auth: this run's web sign-in, or token.json on the command line)
 # ------------------------------------------------------------
 def get_drive_service():
-    creds = None
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-
-    if not creds or not creds.valid:
-        flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
-        creds = flow.run_local_server(port=0)
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
-
-    return build("drive", "v3", credentials=creds)
+    return build("drive", "v3", credentials=google_auth.load_credentials())
 
 
 # ------------------------------------------------------------

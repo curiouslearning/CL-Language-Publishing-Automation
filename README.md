@@ -11,7 +11,9 @@ Tooling for publishing new languages for Curious Learning's **Feed the Monster (
    python -m pip install -r requirements.txt
    ```
 2. Install **ffmpeg** and put it on your `PATH` (it converts non-mp3 audio to mp3).
-3. Put the Google OAuth desktop client file `credentials.json` in `language_automation/`. Ask the team for it and **never commit it**.
+3. Put the Google OAuth client files in `language_automation/`. Ask the team for them and **never commit them** (both are gitignored):
+   - `client_secret_web.json`: the **Web application** client for the web page, from the Google Cloud project `ftm-language-generator`.
+   - `credentials.json`: the **desktop** client, only needed for the command line.
 4. Optional, only for the AI language check: copy `language_automation/.env.example` to `language_automation/.env` and add your key (`GEMINI_API_KEY` or `ANTHROPIC_API_KEY`). Choose the provider and model in `language_automation/config.json`.
 
 ## Usage
@@ -26,7 +28,9 @@ python generate_language.py Hausa           # full pipeline from the command lin
 python ai_language_check.py Hausa           # optional AI review of a generated language
 ```
 
-The first run opens a browser to sign in to Google. Only `@curiouslearning.org` accounts are accepted. The sign-in is cached in `token.json`; delete that file to sign in again.
+**Signing in:** only `@curiouslearning.org` accounts are accepted.
+- **Web page:** the first Generate in a page visit shows a **Sign in with Google** button that opens Google in a new tab. Each run uses the access of the person who signed in. Nothing is saved to disk, so reloading the page asks again.
+- **Command line:** the first run opens a browser to sign in, and the sign-in is cached in `token.json`. Delete that file to sign in again.
 
 The individual steps (`fetch_lang_sheet.py`, `fetch_drive_audios.py`, `check_missing_audios.py`, `fetch_unity_json.py`) can be run on their own for debugging. See [CLAUDE.md](CLAUDE.md#running-the-pipeline).
 

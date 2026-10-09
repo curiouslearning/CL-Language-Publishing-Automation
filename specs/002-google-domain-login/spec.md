@@ -8,6 +8,11 @@
 (`credentials.json` → `token.json`). The separate Streamlit login was removed at the user's
 request.
 
+> **2026-10-09:** the browser sign-in is now the per-session web flow of spec 005
+> (`005-web-google-signin`), which also restores per-person Drive access (this spec's withdrawn
+> FR-009) and checks Google's `hd` claim (withdrawn FR-003). The `token.json` flow remains for the
+> command line only.
+
 > **Final decision (user, 2026-10-05)**: "Don't integrate a separate sign-in authentication from
 > Streamlit. It's already handled with the existing code."
 >
