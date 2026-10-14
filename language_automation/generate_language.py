@@ -11,6 +11,7 @@ from fetch_drive_audios import (
 )
 from check_unused_audio import clean_unused_audios
 from check_missing_audios import check_missing_audios
+from spelling import standardize_json_file
 
 ALLOWED_DOMAIN = "curiouslearning.org"
 
@@ -191,6 +192,18 @@ if __name__ == "__main__":
             print(str(e))
             sys.exit(1)
         print()
+
+    # -------------------------------------------
+    # 🔤 Step 3c: Look-alike vowel signs (ा + े → ो, ा + ै → ौ) in the standard form,
+    #    matching the audio file names, which are saved the same way
+    # -------------------------------------------
+    if os.path.exists(json_path):
+        try:
+            standardize_json_file(json_path)
+        except Exception as e:
+            print("❌ Failed while standardizing spelling in the JSON.")
+            print(str(e))
+            sys.exit(1)
 
     # -------------------------------------------
     # 🧹 Step 4: Remove unused audios

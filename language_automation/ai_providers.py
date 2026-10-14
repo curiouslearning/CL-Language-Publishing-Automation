@@ -15,12 +15,16 @@ SCHEMA_PATH = os.path.join(HERE, "ai_output_schema.json")
 PROVIDERS = ("gemini", "claude")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ENV_KEYS = {"gemini": "GEMINI_API_KEY", "claude": "ANTHROPIC_API_KEY"}
+# A Claude key created outside a workspace needs the workspace named on every request
+WORKSPACE_ENV = "ANTHROPIC_WORKSPACE_ID"
 DEFAULTS = {
     "provider": "gemini",
     # temperature / max_output_tokens: None = the model's own default
     "gemini": {"api_key": "", "model": "gemini-flash-latest", "fallback_models": [],
                "temperature": None, "max_output_tokens": None},
-    "claude": {"api_key": "", "model": "claude-opus-5-5", "effort": "low", "fallbacks": True},
+    "claude": {"api_key": "", "model": "claude-opus-5-5", "effort": "low", "fallbacks": True,
+               # only for an API key that isn't scoped to a workspace: sent as anthropic-workspace-id
+               "workspace_id": ""},
 }
 
 REVIEW_PROMPT = """You review Feed the Monster early-literacy content for one language.
@@ -42,6 +46,36 @@ An empty warnings list is a valid answer."""
 
 class Unavailable(Exception):
     """The AI part of the check can't run or didn't complete; the message says why."""
+
+
+# -------------------------------------------
+# Token usage, in the same shape for both services, so their costs can be compared:
+#   input_tokens   everything sent (prompt + item lines; for Claude, cache reads/writes included)
+#   output_tokens  everything generated and billed as output (thinking included)
+#   thinking_tokens  the part of output_tokens that was thinking (Gemini reports it separately; Claude doesn't)
+# -------------------------------------------
+def _count(obj, name):
+    return int(getattr(obj, name, 0) or 0)
+
+
+def claude_usage(u):
+    if u is None:
+        return None
+    cache_write, cache_read = _count(u, "cache_creation_input_tokens"), _count(u, "cache_read_input_tokens")
+    return {"input_tokens": _count(u, "input_tokens") + cache_write + cache_read,
+            "output_tokens": _count(u, "output_tokens"),  # already includes any thinking
+            "thinking_tokens": None,
+            "cache_read_tokens": cache_read, "cache_write_tokens": cache_write}
+
+
+def gemini_usage(u):
+    if u is None:
+        return None
+    thinking = _count(u, "thoughts_token_count")
+    return {"input_tokens": _count(u, "prompt_token_count"),
+            "output_tokens": _count(u, "candidates_token_count") + thinking,  # thinking is billed as output
+            "thinking_tokens": thinking,
+            "cache_read_tokens": _count(u, "cached_content_token_count"), "cache_write_tokens": 0}
 
 
 def read_env_file(path=ENV_PATH):
@@ -83,6 +117,8 @@ def load_config():
     env_file = read_env_file()
     for name, env in ENV_KEYS.items():
         cfg[name]["api_key"] = os.environ.get(env) or env_file.get(env, "")
+    cfg["claude"]["workspace_id"] = str(os.environ.get(WORKSPACE_ENV) or env_file.get(WORKSPACE_ENV)
+                                        or cfg["claude"]["workspace_id"] or "").strip()
 
     provider = str(cfg["provider"]).strip().lower()
     cfg["provider"] = provider
@@ -115,8 +151,12 @@ class ClaudeReviewer:
         self.anthropic = anthropic
         self.cfg = cfg
         # max_retries=0: exactly one request per check
-        self.client = anthropic.Anthropic(api_key=cfg["api_key"], max_retries=0)
+        workspace = cfg.get("workspace_id") or ""
+        self.client = anthropic.Anthropic(
+            api_key=cfg["api_key"], max_retries=0,
+            default_headers={"anthropic-workspace-id": workspace} if workspace else None)
         self.usage = None
+        self.model_used = cfg["model"]
 
     def review(self, language, item_lines):
         a, cfg = self.anthropic, self.cfg
@@ -135,7 +175,14 @@ class ClaudeReviewer:
         except a.AuthenticationError:
             raise Unavailable("Claude API key rejected")
         except a.BadRequestError as e:
-            hint = ' (try "fallbacks": false under "claude" in config.json)' if "fallback" in str(e.message).lower() else ""
+            message = str(e.message).lower()
+            if "workspace" in message and "header" in message:
+                hint = (f" (this key isn't scoped to a workspace: add {WORKSPACE_ENV}=<workspace id> to "
+                        "language_automation/.env, or create the key inside a workspace in the Claude Console)")
+            elif "fallback" in message:
+                hint = ' (try "fallbacks": false under "claude" in config.json)'
+            else:
+                hint = ""
             raise Unavailable(f"Claude rejected the request: {e.message}{hint}")
         except a.APIStatusError as e:
             if e.status_code in (500, 502, 503, 504, 529):
@@ -145,7 +192,12 @@ class ClaudeReviewer:
         except a.APIConnectionError:
             raise Unavailable("Claude unreachable")
 
-        self.usage = resp.usage
+        self.usage = claude_usage(resp.usage)
+        # With server-side fallbacks another model may have answered; resp.model says which.
+        # A dated id of the configured alias (claude-x-YYYYMMDD) is the same model.
+        answered = getattr(resp, "model", "") or ""
+        if answered and not answered.startswith(cfg["model"]):
+            self.model_used = answered
         if resp.stop_reason == "refusal":
             raise Unavailable("Claude declined the request")
         if resp.stop_reason == "max_tokens":
@@ -206,7 +258,7 @@ class GeminiReviewer:
                 raise Unavailable(f"Gemini unreachable ({type(e).__name__})")
 
             self.model_used = model
-            self.usage = resp.usage_metadata
+            self.usage = gemini_usage(resp.usage_metadata)
             finish = str(getattr((resp.candidates or [None])[0], "finish_reason", "") or "")
             if finish.endswith("MAX_TOKENS"):
                 raise Unavailable(f"Gemini's answer was cut off by max_output_tokens={self.cfg.get('max_output_tokens')} "

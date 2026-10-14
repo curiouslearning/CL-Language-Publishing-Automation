@@ -3,23 +3,15 @@ import json
 import unicodedata
 
 import lang_paths
+from spelling import standard_spelling
 
 ALWAYS_KEEP = ["great.mp3", "amazing.mp3"]
 
-# Devanagari vowel signs that are often typed as two marks instead of one:
-# ा + े (काे) looks the same as ो (को), ा + ै looks the same as ौ
-SPELLING_VARIANTS = [
-    ("ाे", "ो"),
-    ("ाै", "ौ"),
-]
 
 
 def normalize_audio_name(name):
     """Compare key for audio names that look identical but are typed differently."""
-    name = unicodedata.normalize("NFC", name.strip())
-    for variant, standard in SPELLING_VARIANTS:
-        name = name.replace(variant, standard)
-    return name.casefold()
+    return standard_spelling(unicodedata.normalize("NFC", name.strip())).casefold()
 
 
 # Extract all audio names used inside the JSON

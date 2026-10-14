@@ -133,6 +133,16 @@ def ai_warnings(raw, items, can_judge):
     return out
 
 
+def token_line(model, usage):
+    """One progress line with the model and its real token counts."""
+    if not usage:
+        return f"🤖 AI check: {model}, tokens: not reported by the API"
+    thinking = f" (incl. {usage['thinking_tokens']:,} thinking)" if usage.get("thinking_tokens") else ""
+    total = usage["input_tokens"] + usage["output_tokens"]
+    return (f"🤖 AI check: {model}, tokens: input {usage['input_tokens']:,}, "
+            f"output {usage['output_tokens']:,}{thinking}, total {total:,}")
+
+
 def check_language(lang, progress=print):
     """The AI Check Result for one language (see specs/003-ai-language-check/data-model.md)."""
     items = build_items(lang)
@@ -145,6 +155,7 @@ def check_language(lang, progress=print):
         "status": "completed", "reason": "", "note": "", "items_total": len(items),
         "approx_tokens": (len(ai_providers.REVIEW_PROMPT) + len(lines)) // 4,
         "cached": False, "checked_at": "", "warnings": [],
+        "usage": None,  # real token counts from the API (ai_providers.claude_usage / gemini_usage)
     }
     found = consistency_warnings(items)
 
@@ -171,19 +182,22 @@ def check_language(lang, progress=print):
             raw = None
 
     if raw is None:
+        reviewer = None
         try:
             reviewer = ai_providers.make_reviewer(cfg)
             raw = reviewer.review(lang, lines)
             raw["answered_by"] = getattr(reviewer, "model_used", model)
-        except ai_providers.Unavailable as e:
-            result.update(status="unavailable", reason=str(e))
+            raw["usage"] = getattr(reviewer, "usage", None)
+        except (ai_providers.Unavailable, json.JSONDecodeError, ValueError) as e:
+            reason = str(e) if isinstance(e, ai_providers.Unavailable) else f"the AI's answer couldn't be read ({e})"
+            result.update(status="unavailable", reason=reason)
             result["warnings"] = group_and_sort(found)
-            progress(f"⚠ AI check: unavailable: {e}")
-            return result
-        except (json.JSONDecodeError, ValueError) as e:
-            result.update(status="unavailable", reason=f"the AI's answer couldn't be read ({e})")
-            result["warnings"] = group_and_sort(found)
-            progress(f"⚠ AI check: unavailable: {result['reason']}")
+            progress(f"⚠ AI check: unavailable: {reason}")
+            # An answer that came back but couldn't be used (cut off, refused, unreadable) was still billed
+            if reviewer is not None and getattr(reviewer, "usage", None):
+                result["model"] = getattr(reviewer, "model_used", model)
+                result["usage"] = reviewer.usage
+                progress(token_line(result["model"], reviewer.usage))
             return result
         raw["checked_at"] = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
         os.makedirs(CACHE_DIR, exist_ok=True)
@@ -194,6 +208,14 @@ def check_language(lang, progress=print):
     if raw.get("answered_by") and raw["answered_by"] != model:
         result["model"] = raw["answered_by"]  # a fallback model answered (main model was busy)
         progress(f"⚠ AI check: {model} was busy, answered by fallback model {raw['answered_by']}")
+    result["usage"] = raw.get("usage")
+    if result["cached"]:
+        progress("🤖 AI check: tokens used this run: 0 (cached). "
+                 + (token_line(result["model"], result["usage"]).removeprefix("🤖 AI check: ")
+                    .replace("tokens:", "the earlier request used:", 1) if result["usage"] else
+                    "The earlier request's token counts weren't recorded."))
+    else:
+        progress(token_line(result["model"], result["usage"]))
     result.update(assumed_language=raw.get("assumed_language", ""), note=raw.get("note", ""),
                   checked_at=raw.get("checked_at", ""), status="completed" if can_judge else "cannot_judge")
     if not can_judge:

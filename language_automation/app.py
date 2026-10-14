@@ -15,7 +15,6 @@ from streamlit.runtime.scriptrunner import get_script_run_ctx
 import ai_providers
 import lang_paths
 import web_signin
-from check_unused_audio import SPELLING_VARIANTS
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PIPELINE = os.path.join(APP_DIR, "generate_language.py")
@@ -137,43 +136,6 @@ def render_signin_callback():
     st.stop()
 
 
-def standard_spelling(text):
-    """The text with look-alike vowel-sign sequences (e.g. ा + े) replaced by the single standard sign (ो)."""
-    for variant, standard in SPELLING_VARIANTS:
-        text = text.replace(variant, standard)
-    return text
-
-
-def lookalike_spellings(lang):
-    """
-    Sheet texts typed with look-alike sequences (ा + े instead of ो, ा + ै instead of ौ).
-    They render the same but are different characters, so recording names typed the standard way
-    don't match. Returns [{"text", "standard", "where"}], one per distinct text.
-    """
-    path = lang_paths.json_path(lang)
-    if not os.path.isfile(path):
-        return []
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    found = {}
-
-    def check(text, where):
-        if text and standard_spelling(text) != text:
-            found.setdefault(text, {"text": text, "standard": standard_spelling(text), "where": []})["where"].append(where)
-
-    for level in data.get("Levels", []):
-        number = level.get("LevelMeta", {}).get("LevelNumber")
-        for puzzle in level.get("Puzzles", []):
-            check(((puzzle.get("prompt") or {}).get("PromptText") or "").strip(), f"level {number}")
-            for stone in puzzle.get("targetstones", []) + puzzle.get("foilstones", []):
-                check((stone.get("StoneText") or "").strip(), f"level {number}")
-    for n, text in enumerate(data.get("FeedbackTexts") or [], 1):
-        check((text or "").strip(), f"feedback {n}")
-    for item in found.values():
-        item["where"] = list(dict.fromkeys(item["where"]))  # unique, in order
-    return list(found.values())
-
-
 def run_pipeline(lang, after=None):
     """
     Run generate_language.py for one language, streaming its output into the UI.
@@ -293,6 +255,8 @@ def run_pipeline(lang, after=None):
         # Unused audio cleanup (Step 6)
         if stripped.startswith("🗑 Deleted: "):
             result["deleted"].append(stripped[len("🗑 Deleted: "):])
+        elif stripped.startswith("🔤 Standard spelling: "):
+            result.setdefault("standardized", []).append(stripped[len("🔤 Standard spelling: "):].split(" (", 1)[0])
         elif stripped.startswith("🔍 Look-alike: "):
             # Drive name ≈ sheet name: kept as is, never renamed automatically
             result.setdefault("lookalike_files", []).append(stripped[len("🔍 Look-alike: "):].split(" (", 1)[0])
@@ -462,12 +426,6 @@ def run_pipeline(lang, after=None):
         render_steps(final_state="complete")
         status.update(label=f"**{lang}** · Completed", state="complete", expanded=True)
 
-    if result["authenticated"] and result["state"] != "cancelled":
-        try:
-            result["lookalike"] = lookalike_spellings(lang)
-        except (OSError, ValueError):
-            result["lookalike"] = []
-
     if after:
         after(result, status)
 
@@ -580,23 +538,14 @@ def render_summary(result):
     else:
         st.caption("Missing-audio check did not run (the pipeline stopped earlier).")
 
-    # Look-alike spellings: warn only. Nothing is renamed or changed automatically; the team checks.
-    lookalike = result.get("lookalike") or []
-    if result["lookalike_files"] or lookalike:
-        lines = ["**Please check: look-alike spellings.** Nothing was renamed or changed."]
-        if result["lookalike_files"]:
-            lines.append(f"\n{len(result['lookalike_files'])} Drive audio file name(s) look the same as a name the "
-                         "sheet uses, but are typed with different characters, so the game won't find them "
-                         "until the names match (Drive file ≈ name in the sheet):")
-            lines += [f"- {pair}" for pair in result["lookalike_files"]]
-        if lookalike:
-            lines.append("\nThe sheet types these with **ा + े** (two marks) instead of the single standard vowel "
-                         "sign **ो** (or **ा + ै** instead of **ौ**). They look identical on screen. "
-                         "Standard form and where they appear:")
-            lines += [f"- {i['text']} → {i['standard']}  ({', '.join(i['where'][:6])}"
-                      f"{' …' if len(i['where']) > 6 else ''})" for i in lookalike]
-        lines.append("\nFix the spelling in the sheet or the Drive file name so both match, then regenerate.")
-        st.warning("\n".join(lines))
+    # Drive name differs from the sheet name only in upper/lowercase: kept as is, never renamed
+    if result["lookalike_files"]:
+        st.warning("**Name differs only in upper/lowercase** (Drive file ≈ name in the sheet). "
+                   "Rename one so they match:\n\n" + "\n".join(f"- {p}" for p in result["lookalike_files"]))
+
+    # ा + े / ा + ै written as the standard ो / ौ: done automatically, just noted
+    if result.get("standardized"):
+        st.caption("🔤 Look-alike vowel signs written in the standard form: " + ", ".join(result["standardized"]))
 
     # Runs recorded before look-alikes were reported instead of renamed
     if result["renamed"]:
@@ -667,11 +616,31 @@ def render_ai_warning(w):
     )
 
 
+def render_ai_usage(ai):
+    """Model and real input/output tokens of the AI request, to compare providers' costs."""
+    model = ai.get("model") or "?"
+    usage = ai.get("usage")
+    if not usage:
+        if ai.get("status") != "unavailable" or ai.get("model"):
+            note = ("earlier check, token counts weren't recorded then" if ai.get("cached")
+                    else "no tokens used" if ai.get("status") == "unavailable" else "not reported by the API")
+            st.markdown(f"**Model:** `{model}` · **Tokens:** {note}")
+        return
+    inp, out = usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+    thinking = f" (incl. {usage['thinking_tokens']:,} thinking)" if usage.get("thinking_tokens") else ""
+    st.markdown(f"**Model:** `{model}` · **Input tokens:** {inp:,} · **Output tokens:** {out:,}{thinking} · "
+                f"**Total:** {inp + out:,}")
+    if ai.get("cached"):
+        st.caption("These are the counts of the earlier request. This run reused its result and used 0 tokens.")
+
+
 def render_ai_section(ai, lang):
     """The "AI language check" report (contracts/ai-check-cli-and-ui.md). Advisory: warnings, never errors."""
     provider = ai.get("provider") or "AI"
     language = f", language: {ai['assumed_language']}" if ai.get("assumed_language") else ""
     st.markdown(f"#### 🤖 AI language check ({provider}{language})")
+    if st.session_state.get("show_tokens"):
+        render_ai_usage(ai)
     status = ai.get("status")
     found = ai.get("warnings", [])
     from_ai = [w for w in found if w.get("source") == "ai"]
@@ -813,12 +782,24 @@ with st.form("generate", clear_on_submit=True):  # empty the input after every G
 
 # AI language check (spec 003): off by default; when off, no AI service is called
 ai_cfg, ai_reason = ai_providers.load_config()
+st.session_state.setdefault("show_tokens", False)
 st.toggle("🤖 AI language check", key="ai_check", value=False, disabled=busy,
           help="After generating, an AI reviews the language's letters, words and feedback sentences "
                "and suggests corrections. One request per language; unchanged content isn't sent again.")
 if st.session_state.ai_check:
     st.caption(f"Not configured: {ai_reason}. See `.env.example`." if ai_reason
                else f"Uses {ai_cfg['provider']} ({ai_cfg[ai_cfg['provider']]['model']}).")
+    # Show tokens used (spec 006): only under the AI check, off by default. The choice is kept in
+    # show_tokens, so it survives the AI toggle being switched off and on (Streamlit drops the
+    # state of a widget that isn't drawn). It only changes what the page shows; the counts are
+    # always recorded in the report and the AI log.
+    _, indented = st.columns([0.04, 0.96])
+    with indented:
+        st.session_state.show_tokens = st.toggle(
+            "🔢 Show tokens used", key="show_tokens_toggle", value=st.session_state.show_tokens,
+            disabled=busy,
+            help="Shows the model and the real input and output tokens of each AI check, "
+                 "to compare the cost of models and providers.")
 
 if error := st.session_state.pop("form_error", None):
     st.error(error)

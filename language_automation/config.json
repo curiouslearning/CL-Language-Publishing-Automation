@@ -4,15 +4,14 @@
   "gemini": {
     "model": "gemini-2.5-flash-lite",
     "temperature": 0.7,
-    "max_output_tokens": 2000,
     "fallback_models": [
-      "gemini-2.5-flash",
-      "gemini-3.1-flash-lite"
+      "gemini-3.1-flash-lite",
+      "gemini-2.5-flash"
     ]
   },
   "claude": {
-    "model": "claude-opus-5-5",
+    "model": "claude-haiku-5-5",
     "effort": "low",
-    "fallbacks": true
+    "fallbacks": false
   }
 }

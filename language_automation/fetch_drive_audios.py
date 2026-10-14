@@ -9,6 +9,7 @@ from googleapiclient.http import MediaIoBaseDownload
 
 import google_auth
 import lang_paths
+from spelling import standard_spelling
 
 ROOT_FOLDER_ID = "1ObyoMA9MoTjgMbldRJWDun1wajJ78zRu"
 
@@ -117,7 +118,7 @@ def download_convert_to_mp3(service, file_obj, output_dir):
     # Drive names are untrusted: a name like "..\..\x.wav" or "C:\x.wav" must not escape output_dir
     name = os.path.basename(original.replace("\\", "/"))
     ext = os.path.splitext(name)[1].lower()
-    base = INVALID_NAME_CHARS.sub("_", os.path.splitext(name)[0]).strip()
+    base = standard_spelling(INVALID_NAME_CHARS.sub("_", os.path.splitext(name)[0]).strip())
     if base in ("", ".", ".."):
         print(f"❌ Skipped unsafe file name: {original}")
         return False
@@ -301,7 +302,7 @@ def download_json_drive_links(lang_path, language):
             continue
 
         base, ext = os.path.splitext(meta["name"].strip())
-        base = INVALID_NAME_CHARS.sub("_", base).strip()
+        base = standard_spelling(INVALID_NAME_CHARS.sub("_", base).strip())
         # Two different links with the same Drive file name must not overwrite each other
         if base + ".mp3" in used_names:
             base = f"{base}_{file_id[:6]}"
