@@ -50,19 +50,28 @@ The individual steps (`fetch_lang_sheet.py`, `fetch_drive_audios.py`, `check_mis
 | --- | --- |
 | `language_automation/` | Pipeline scripts, Streamlit app (`app.py`), AI check, `config.json` |
 | `Dockerfile`, `cloudbuild.yaml` | Container image and Cloud Run deploy for the web page |
-| `specs/` | Spec-kit feature specs (001–008) |
+| `.circleci/config.yml` | CI/CD: build check on every PR, deploy on every merge to `main` |
+| `specs/` | Spec-kit feature specs (001–010) |
 | `.specify/`, `.claude/skills/` | Spec-kit templates, scripts and commands |
 | `CLAUDE.md` | Detailed developer and maintainer notes |
 
 ## Deploy to Cloud Run
 
-The web page runs on Cloud Run in the `ftm-language-generator` project. `cloudbuild.yaml` builds the `Dockerfile` image, pushes it to Artifact Registry and deploys it. It uses one instance, scales to zero, and has the page's own curiouslearning.org sign-in in front.
+The web page runs on Cloud Run in the `ftm-language-generator` project. `cloudbuild.yaml` builds the `Dockerfile` image, pushes it to Artifact Registry (repo `ftm`) and deploys it. It uses one instance, scales to zero, and has the page's own curiouslearning.org sign-in in front.
 
-**One-time setup** (a project Owner, from the repo root; the defaults are region `us-central1` and service `ftm-language-generator`):
+**How deploys happen (CircleCI, spec 010):** the same CircleCI setup as our other projects (`.circleci/config.yml`).
+- **Every PR** (every branch except `main`) runs `build-check`: the Docker image is built, and nothing is pushed or deployed. The result shows as a check on the PR.
+- **Every merge or push to `main`** runs `deploy`. CircleCI signs in to Google Cloud with its OIDC token (no key stored anywhere) as `ftm-deployer`, and runs `cloudbuild.yaml`.
+  - A merge that only changes docs or specs (`*.md`, `specs/`, `.specify/`, `.claude/`, `.github/`) is skipped.
+  - If two merges overlap, the newer build wins: an older one that finishes last doesn't deploy.
+- **Status:** the check on the GitHub commit/PR, and the job log in CircleCI.
+- **Merge code changes only when nobody is generating a language.** A deploy replaces the running server and cancels a run in progress.
+
+**One-time setup** (a project Owner, from the repo root, in Git Bash; region `us-central1`, service `ftm-language-generator`):
 
 ```bash
 P=ftm-language-generator
-BUILD_SA=838897084130-compute@developer.gserviceaccount.com   # Cloud Build's service account in this project
+PN=838897084130   # project number
 
 # Container repository
 gcloud artifacts repositories create ftm --repository-format=docker --location=us-central1 --project=$P
@@ -76,26 +85,51 @@ gcloud secrets create ftm-oauth-web-client --data-file=language_automation/clien
 gcloud secrets add-iam-policy-binding ftm-oauth-web-client --member=serviceAccount:$RUN_SA --role=roles/secretmanager.secretAccessor --project=$P
 
 # Gemini API key for the AI check (spec 007): restricted to the Gemini API, piped straight into
-# the secret so it never lands in a file or the terminal (needs Git Bash or another POSIX shell)
-gcloud services enable generativelanguage.googleapis.com apikeys.googleapis.com secretmanager.googleapis.com --project=$P
+# the secret so it never lands in a file or the terminal
+gcloud services enable generativelanguage.googleapis.com apikeys.googleapis.com secretmanager.googleapis.com iamcredentials.googleapis.com sts.googleapis.com --project=$P
 gcloud services api-keys create --display-name="FTM generator (Cloud Run)" --api-target=service=generativelanguage.googleapis.com --project=$P
 KEY_NAME=$(gcloud services api-keys list --project=$P --filter='displayName="FTM generator (Cloud Run)"' --format="value(name)" --limit=1)
 gcloud services api-keys get-key-string $KEY_NAME --format="value(keyString)" | tr -d '\r\n' | gcloud secrets create ftm-gemini-api-key --data-file=- --replication-policy=automatic --project=$P
 gcloud secrets add-iam-policy-binding ftm-gemini-api-key --member=serviceAccount:$RUN_SA --role=roles/secretmanager.secretAccessor --project=$P
 
-# Let Cloud Build deploy as the runtime account and make the service public
-gcloud projects add-iam-policy-binding $P --member=serviceAccount:$BUILD_SA --role=roles/run.admin
-gcloud iam service-accounts add-iam-policy-binding $RUN_SA --member=serviceAccount:$BUILD_SA --role=roles/iam.serviceAccountUser --project=$P
+# Deploy identity: starts the Cloud Build, pushes to repo ftm, deploys as the runtime account. No secret access.
+gcloud iam service-accounts create ftm-deployer --display-name="FTM deploy (Cloud Build)" --project=$P
+DEP=ftm-deployer@$P.iam.gserviceaccount.com
+for R in roles/run.admin roles/cloudbuild.builds.editor roles/logging.logWriter roles/serviceusage.serviceUsageConsumer; do
+  gcloud projects add-iam-policy-binding $P --member=serviceAccount:$DEP --role=$R --condition=None
+done
+gcloud iam service-accounts add-iam-policy-binding $RUN_SA --member=serviceAccount:$DEP --role=roles/iam.serviceAccountUser --project=$P
+gcloud iam service-accounts add-iam-policy-binding $DEP --member=serviceAccount:$DEP --role=roles/iam.serviceAccountUser --project=$P
+gcloud artifacts repositories add-iam-policy-binding ftm --location=us-central1 --member=serviceAccount:$DEP --role=roles/artifactregistry.writer --project=$P
+gcloud storage buckets add-iam-policy-binding gs://${P}_cloudbuild --member=serviceAccount:$DEP --role=roles/storage.admin
+
+# CircleCI sign-in without a key (OIDC + workload identity federation). The IDs are in CircleCI:
+# Organization Settings > Overview (organization ID) and Project Settings > Overview (project ID).
+ORG_ID="<CircleCI organization ID>"; CCI_PROJECT="<CircleCI project ID>"
+gcloud iam workload-identity-pools create circleci --location=global --display-name="CircleCI" --project=$P
+gcloud iam workload-identity-pools providers create-oidc circleci-oidc --location=global --workload-identity-pool=circleci \
+  --issuer-uri="https://oidc.circleci.com/org/$ORG_ID" --allowed-audiences="$ORG_ID" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.project_id=assertion['oidc.circleci.com/project-id']" \
+  --attribute-condition="attribute.project_id=='$CCI_PROJECT'" --project=$P
+gcloud iam service-accounts add-iam-policy-binding $DEP --role=roles/iam.workloadIdentityUser --project=$P \
+  --member="principalSet://iam.googleapis.com/projects/$PN/locations/global/workloadIdentityPools/circleci/attribute.project_id/$CCI_PROJECT"
 ```
 
-Only `ftm-generator-run` can read the two secrets. Cloud Build never needs them: Cloud Run reads them as the runtime account when an instance starts. If a secret is missing or not readable, the deploy fails and the previous revision keeps serving. The project has billing enabled, so Gemini usage from this key is billed at paid-tier rates. It's small (about 1.5 K input tokens per language; turn on "Show tokens used" to see it). Optionally, set a budget alert on the project in Billing → Budgets & alerts.
+Then:
+- In the Cloud Console (Google Auth Platform → Clients → the web client), add the Cloud Run address as an **authorized redirect URI**. Include the trailing slash: `https://ftm-language-generator-838897084130.us-central1.run.app/`
+- In CircleCI (organization `curiouslearning`):
+  - set up the project from `main`, using the repo's `.circleci/config.yml`;
+  - create a context named **`ftm-language-generator-gcp`** (Organization Settings → Contexts). It holds nothing secret: CircleCI only issues the OIDC token to jobs that use a context.
 
-Then, in the Cloud Console (Google Auth Platform → Clients → the web client), add the Cloud Run address as an **authorized redirect URI**. Include the trailing slash: `https://ftm-language-generator-838897084130.us-central1.run.app/`
+Only `ftm-generator-run` can read the two secrets. Neither CircleCI nor `ftm-deployer` needs them: Cloud Run reads them as the runtime account when an instance starts. If a secret is missing or not readable, the deploy fails and the previous revision keeps serving.
 
-**Deploy** (also for every later update): `gcloud builds submit --config cloudbuild.yaml --project=ftm-language-generator`
+The project has billing enabled, so Gemini usage from this key is billed at paid-tier rates. It's small: about 1.5 K input tokens per language (turn on "Show tokens used" to see it). Optionally, set a budget alert on the project in Billing → Budgets & alerts.
+
+**Manual deploy** (emergencies only): `gcloud builds submit --config cloudbuild.yaml --region=us-central1 --project=ftm-language-generator`. It uploads your local files, committed or not, and the next merge to `main` replaces it. To redeploy `main` as it is, rerun the latest `deploy` job in CircleCI.
+
+**Roll back:** `gcloud run services update-traffic ftm-language-generator --to-revisions=<previous revision>=100 --region=us-central1 --project=ftm-language-generator`. The revisions are listed under Cloud Run → the service → Revisions. The next deploy moves traffic to the new revision again.
 
 - Secrets never go into the image or the upload. `.gcloudignore` and `.dockerignore` exclude them, and Cloud Run mounts them from Secret Manager.
-- Don't deploy while someone is running a language: the new revision replaces the running one.
 - Changing the region or the service name changes the address. Pass `--substitutions=_REGION=...` and register the new redirect URI.
 
 ### Rotate the Gemini key
@@ -108,8 +142,8 @@ OLD_KEY=$(gcloud services api-keys list --project=$P --filter='displayName:"FTM 
 gcloud services api-keys create --display-name="FTM generator (Cloud Run) $(date +%F)" --api-target=service=generativelanguage.googleapis.com --project=$P
 NEW_KEY=$(gcloud services api-keys list --project=$P --filter="displayName=\"FTM generator (Cloud Run) $(date +%F)\"" --format="value(name)" --limit=1)
 gcloud services api-keys get-key-string $NEW_KEY --format="value(keyString)" | tr -d '\r\n' | gcloud secrets versions add ftm-gemini-api-key --data-file=- --project=$P
-# Pick up the new version: redeploy (a new revision resolves :latest again)
-gcloud builds submit --config cloudbuild.yaml --project=$P
+# Pick up the new version: redeploy (a new revision resolves :latest again), e.g. rerun the last CircleCI deploy job, or:
+gcloud builds submit --config cloudbuild.yaml --region=us-central1 --project=$P
 # After checking the AI check still works: retire the old version and the old key
 gcloud secrets versions list ftm-gemini-api-key --project=$P
 gcloud secrets versions disable <OLD_VERSION> --secret=ftm-gemini-api-key --project=$P

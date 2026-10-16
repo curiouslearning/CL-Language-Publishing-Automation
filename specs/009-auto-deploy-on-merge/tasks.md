@@ -56,9 +56,9 @@
 - [X] T007 Validate both YAML files parse (`python -c "import yaml,sys; [yaml.safe_load(open(f)) for f in ('cloudbuild.yaml','cloudbuild-pr.yaml')]"`). Then run one manual deploy with `gcloud builds submit --config cloudbuild.yaml --project=ftm-language-generator` (only while nobody is generating), which proves:
   - `ftm-deployer` has enough permission (no secret role needed, R4; if refused, grant `roles/secretmanager.viewer` on the two secrets and note it in research R4);
   - the guard works (first run: no label yet → deploys and sets `ftm-build-time`).
-- [ ] T008 (cloud + github) Create the connection: `gcloud builds connections create github ftm-github --region=us-central1 --project=ftm-language-generator`. Open the printed link, authorize, and have a **`curiouslearning` org owner install "Google Cloud Build" on the org with access to only `CL-Language-Publishing-Automation`**. Then `gcloud builds connections describe ftm-github --region=us-central1 --project=ftm-language-generator --format="value(installationState.stage)"` must say `COMPLETE`.
-- [ ] T009 (cloud) Link the **existing** repo (this creates no repository, R0): `gcloud builds repositories create cl-language-publishing-automation --connection=ftm-github --remote-uri=https://github.com/curiouslearning/CL-Language-Publishing-Automation.git --region=us-central1 --project=ftm-language-generator`.
-- [ ] T010 (user) With the user's go-ahead:
+- [X] T008 (cloud + github) Create the connection: `gcloud builds connections create github ftm-github --region=us-central1 --project=ftm-language-generator`. Open the printed link, authorize, and have a **`curiouslearning` org owner install "Google Cloud Build" on the org with access to only `CL-Language-Publishing-Automation`**. Then `gcloud builds connections describe ftm-github --region=us-central1 --project=ftm-language-generator --format="value(installationState.stage)"` must say `COMPLETE`.
+- [X] T009 (cloud) Link the **existing** repo (this creates no repository, R0): `gcloud builds repositories create cl-language-publishing-automation --connection=ftm-github --remote-uri=https://github.com/curiouslearning/CL-Language-Publishing-Automation.git --region=us-central1 --project=ftm-language-generator`.
+- [X] T010 (user) With the user's go-ahead:
   - create branch `009-auto-deploy-on-merge` from `main`;
   - commit the currently untracked/modified work: `Dockerfile`, `.dockerignore`, `.gcloudignore`, `cloudbuild.yaml`, `cloudbuild-pr.yaml`, the specs 007–009 folders, `language_automation/` changes (`ai_providers.py`, `app.py`, `package_store.py`, `.env.example`, `check_access.py`), `README.md`, `CLAUDE.md`, `requirements.txt`, `.specify/memory/constitution.md` and the spec 003 edits;
   - re-run T002 on the staged set first;
@@ -74,7 +74,7 @@
 
 **Independent Test**: quickstart V2.
 
-- [ ] T011 [US2] (cloud) Create the PR trigger:
+- [X] T011 [US2] (cloud) Create the PR trigger:
 
   ```bash
   gcloud builds triggers create github --name=ftm-pr-check --region=us-central1 --project=ftm-language-generator \
@@ -85,7 +85,7 @@
   ```
 
   **No ignored files** on this trigger (research R2).
-- [ ] T012 [US2] Trigger the check on the open rollout PR: push an empty commit after the user's go-ahead, or comment `/gcbrun`. Confirm:
+- [X] T012 [US2] Trigger the check on the open rollout PR: push an empty commit after the user's go-ahead, or comment `/gcbrun`. Confirm:
   - the PR shows `ftm-pr-check` → success with a "Details" log link;
   - the log has only the docker build;
   - `gcloud run services describe ftm-language-generator --region=us-central1 --project=ftm-language-generator --format="value(status.latestReadyRevisionName)"` is unchanged.
@@ -99,7 +99,7 @@
 
 **Independent Test**: quickstart V3 (merge → live), V4 (docs-only → no deploy), V5 (newest wins).
 
-- [ ] T014 [US1] (cloud) Create the deploy trigger:
+- [X] T014 [US1] (cloud) Create the deploy trigger:
 
   ```bash
   gcloud builds triggers create github --name=ftm-deploy-main --region=us-central1 --project=ftm-language-generator \
@@ -109,7 +109,7 @@
     --service-account=projects/ftm-language-generator/serviceAccounts/ftm-deployer@ftm-language-generator.iam.gserviceaccount.com
   ```
 
-- [ ] T015 [US1] (user) Merge the rollout PR, once the user confirms nobody is generating a language. Confirm (quickstart V3):
+- [X] T015 [US1] (user) Merge the rollout PR, once the user confirms nobody is generating a language. Confirm (quickstart V3):
   - `ftm-deploy-main` starts within 1 minute and shows on the merge commit;
   - it succeeds within ~10 minutes;
   - the new revision carries `commit-sha=<merge short SHA>`;
