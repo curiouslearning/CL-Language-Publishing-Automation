@@ -42,15 +42,18 @@ The generated `ftm_<lang>.json` defines the audio files the game needs. The pipe
 
 - keep every audio file referenced by `PromptAudio`, `FeedbackAudios`, and `OtherAudios`, plus
   the fixed exceptions (`great.mp3`, `amazing.mp3`);
-- keep a near-match (by `normalize_audio_name`) **as is**, neither renamed nor deleted, and
-  report it as a look-alike for the team to check. This covers names that look identical but are
-  typed with different characters, such as Devanagari ा + े versus ो;
+- write the look-alike Devanagari vowel sequences ा + े and ा + ै as the single standard signs
+  ो and ौ, in every JSON string and in every downloaded audio file name (`spelling.py`), so both
+  sides match. This is the one deliberate exception to the rule below (user decision, 2026-10-14):
+  these sequences render identically, so the team cannot see the difference to fix it;
+- keep any other near-match (by `normalize_audio_name`, e.g. upper/lowercase only) **as is**,
+  neither renamed nor deleted, and report it as a look-alike for the team to check;
 - rewrite Drive share links in the JSON to the standard audio URL prefix so that every reference
   is matched by basename;
 - report missing audio without failing the run.
 
-The pipeline MUST NOT rename, re-spell or otherwise "correct" content or file names on the basis
-of similarity. When names only look alike, it warns and leaves the fix to the content team.
+Apart from the vowel-sign standardization above, the pipeline MUST NOT rename, re-spell or
+otherwise "correct" content or file names on the basis of similarity. When names only look alike, it warns and leaves the fix to the content team.
 
 Rationale: the game requests audio by exact filename. Content teams fix gaps after the run, so a
 report helps them more than a hard stop. A guessed correction can hide a real mistake, while a

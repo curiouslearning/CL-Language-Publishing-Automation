@@ -1,0 +1,61 @@
+# Build the generator image and deploy it to Cloud Run (settings from spec 005, research R8).
+# Runs automatically on every code merge to main (trigger ftm-deploy-main, spec 009), and by hand from
+# the repo root:   gcloud builds submit --config cloudbuild.yaml --project=ftm-language-generator
+# One-time project setup (Artifact Registry repo, service accounts, secrets, triggers): README "Deploy to Cloud Run".
+
+# Least-privilege deploy identity (spec 009): build, push to repo ftm, deploy as the runtime account. No secret access.
+serviceAccount: projects/${PROJECT_ID}/serviceAccounts/ftm-deployer@${PROJECT_ID}.iam.gserviceaccount.com
+
+substitutions:
+  _REGION: us-central1
+  _SERVICE: ftm-language-generator
+  _REPO: ftm
+  _RUN_SA: ftm-generator-run
+  _IMAGE: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}
+  # Cloud Run's address for this service. It must also be an authorized redirect URI on the web OAuth client.
+  _PUBLIC_URL: https://${_SERVICE}-${PROJECT_NUMBER}.${_REGION}.run.app/
+
+options:
+  dynamicSubstitutions: true
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-t", "${_IMAGE}:${BUILD_ID}", "-t", "${_IMAGE}:latest", "."]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "--all-tags", "${_IMAGE}"]
+
+  # Newest wins (spec 009): builds of two quick merges run side by side. The service carries the createTime
+  # of the build that deployed it (label ftm-build-time); an older build that finishes last doesn't deploy.
+  # $$ = a bash variable (not a Cloud Build substitution).
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        BUILT=$$(date -d "$$(gcloud builds describe ${BUILD_ID} --region=${LOCATION} --format='value(createTime)')" +%s)
+        LIVE=$$(gcloud run services describe ${_SERVICE} --region=${_REGION} --format='value(metadata.labels.ftm-build-time)' 2>/dev/null || true)
+        if [ -n "$$LIVE" ] && [ "$$LIVE" -gt "$$BUILT" ]; then
+          echo "⏭️ Skipping deploy: a newer build ($$LIVE) is already live (this build: $$BUILT)"
+          exit 0
+        fi
+        # The page does its own curiouslearning.org sign-in (spec 005), so Cloud Run lets everyone reach it.
+        # One instance: the one-run lock, the sign-in pending store and the package registry are in-process.
+        # A run can take a while (timeout 3600); session affinity keeps one browser session on the instance.
+        # Secrets: the web OAuth client as a file; the Gemini key (spec 007) as the env var the AI check reads.
+        # :latest is resolved when an instance starts. Never put the key itself in --set-env-vars.
+        gcloud run deploy ${_SERVICE} \
+          --image=${_IMAGE}:${BUILD_ID} \
+          --region=${_REGION} \
+          --service-account=${_RUN_SA}@${PROJECT_ID}.iam.gserviceaccount.com \
+          --allow-unauthenticated \
+          --min-instances=0 --max-instances=1 --cpu=1 --memory=2Gi \
+          --timeout=3600 --session-affinity \
+          --set-env-vars=FTM_HOSTED=1,FTM_PUBLIC_URL=${_PUBLIC_URL},FTM_OAUTH_CLIENT_FILE=/secrets/client_secret_web.json \
+          --set-secrets=/secrets/client_secret_web.json=ftm-oauth-web-client:latest,GEMINI_API_KEY=ftm-gemini-api-key:latest \
+          --update-labels=ftm-build-time=$$BUILT,commit-sha=${SHORT_SHA}

@@ -1,0 +1,8 @@
+# What `gcloud builds submit` uploads. Everything .gitignore excludes (secrets, lang/, .env,
+# token.json, client_secret*.json) stays on this machine; .dockerignore filters again at build time.
+#!include:.gitignore
+.git/
+.gitignore
+.claude/
+.specify/
+specs/

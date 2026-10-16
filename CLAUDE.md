@@ -14,6 +14,27 @@ Spec-driven workflow (GitHub spec-kit, `/speckit-*` commands): project rules are
 - `003-ai-language-check`: the optional AI review.
 - `004-generator-page-flow`: the web page as built (authentication display, one click per run, cancellation, regenerate prompt, Add another language).
 - `005-web-google-signin`: per-person web Google sign-in for the page (curiouslearning.org only). Hosting is out of scope; the user handles it separately.
+- `006-ai-token-usage`: real input/output tokens and the answering model for every AI check, and the "Show tokens used" toggle.
+- `007-gemini-key-cloud-run`: Gemini is the hosted AI provider. The project's restricted key lives in Secret Manager (`ftm-gemini-api-key`) and reaches Cloud Run as `GEMINI_API_KEY`.
+- `008-language-package-download`: the generated package as a zip on the page. On the hosted page it's deleted once its page session ends.
+
+## Hosting (Cloud Run; AI key: spec 007)
+
+`Dockerfile` + `cloudbuild.yaml` at the repo root follow spec 005 research R8: Cloud Run in `ftm-language-generator`, region `us-central1`, one instance (the lock and pending store are in-process), `--session-affinity`, `--timeout=3600`, `--allow-unauthenticated` (the page does its own sign-in). The deploy sets `FTM_HOSTED=1`, `FTM_PUBLIC_URL` (`https://<service>-<project number>.<region>.run.app/`, which must also be a redirect URI on the web OAuth client) and `FTM_OAUTH_CLIENT_FILE=/secrets/client_secret_web.json`. They're not in the image, so it can still run locally. Secrets come from Secret Manager, readable only by the runtime account `ftm-generator-run`:
+- `ftm-oauth-web-client`, mounted as a file;
+- `ftm-gemini-api-key`, set as the env var `GEMINI_API_KEY` (spec 007). It's an API key in the project, restricted to the Gemini API. `:latest` is resolved at instance start, so rotating it means a new secret version plus a redeploy.
+
+If a secret is missing or not readable, the deploy fails and the old revision keeps serving. `.dockerignore` is an allow-list and `.gcloudignore` includes `.gitignore`: keep secrets out of both. One-time setup and deploy: README "Deploy to Cloud Run".
+
+**Generated packages on Cloud Run (spec 008):** `lang/` lives in the container's in-memory filesystem and counts against the 2 GiB. The page's zip download is the only way out. When `FTM_HOSTED=1`, `package_store.start_janitor` (started once via `app.package_janitor`, a `st.cache_resource`) checks every 15 s:
+- it deletes a language folder once its owning page session has been disconnected for 60 s (`is_active_session`; a reconnect resets the wait), downloaded or not;
+- it also deletes folders a run in this process claimed but nobody owns any more;
+- it never deletes during an active run, and never deletes a folder that existed before the process started (`_claimed`);
+- each removal prints `🧹 Cleaned up lang/<lang> (session ended | no owner)` to the server log only.
+
+Locally nothing is ever deleted.
+
+Local testing uses the developer's personal Gemini API key (Google AI Studio) in `.env`, not a key from the `ftm-language-generator` project. The project's restricted key is used only by Cloud Run.
 
 ## Running the pipeline
 
@@ -63,6 +84,16 @@ There is no separate login page. Sign-in happens when Generate is pressed (web p
   - **No**, or closing the dialog, keeps the existing package and runs only the languages that don't exist yet.
 - **Add another language:** when every run in the last batch is `complete` or `warning` and nothing is busy, a success banner with **➕ Add another language** appears above "Latest run", with a second button below the results. `start_new_language` sets `last_batch = 0` (the run moves to Previous runs), clears `lang_input`, and sets `focus_form`. On the next render, a fixed `st.html(..., unsafe_allow_javascript=True)` script scrolls to the top and focuses the language box. Spec 004 records the whole page flow.
 - **AI language check toggle** (`key="ai_check"`, off by default, disabled while busy): when it's on, `run_pipeline(lang, after=ai_step)` runs `ai_language_check.py` as a subprocess after the pipeline, under the same lock and tab-close cancel. It only runs if the user is authenticated, the run wasn't cancelled, and the game JSON exists. While it runs, only the run's title says so: nothing appears under the steps. Its output and warnings go to a separate `result["ai_log"]`, never into the pipeline log. `render_summary` shows `render_ai_section` and `render_ai_log` (an "AI check log" expander and a "Download AI log" button) right after the unused-audio result. When it's off, nothing is called.
+- **Show tokens used toggle** (spec 006): shown indented under the AI check toggle only while that's on; off by default, disabled while busy. Its value lives in `st.session_state.show_tokens` (the widget key is `show_tokens_toggle`, because Streamlit drops a hidden widget's state), so it survives the AI toggle going off and on. When on, `render_ai_section` calls `render_ai_usage` (model + input/output/total tokens) for every run on the page. Display only: counts are always recorded.
+- **Package download** (spec 008): `render_summary` calls `render_package` right before "Download log".
+  - **Ownership:** `package_store.py` keeps an in-process registry: language → owning session, `run_id`, active.
+    - `run_pipeline` claims the language right before starting the pipeline subprocess (`result["package_id"]`).
+    - It calls `finish` in a `finally` after the AI step. `touched=False` (stopped before the wipe step) hands the folder back to its earlier owner.
+  - **Availability** (`package_store.availability`):
+    - `available` → **📦 Download language package (.zip)**, `on_click="ignore"`. The data is a callable, so `build_zip` (ZIP_STORED, `<lang>/ftm_<lang>.json`, `audios/`, `images/`) only runs on click, on a Streamlit worker thread. That means no rerun, and it works mid-batch. It's followed by a caption: hosted "Kept on the server only until you close or reload this page…", local "Also saved in `lang/<lang>/`…".
+    - `regenerating` / `replaced` / `gone` → a 📦 caption saying why.
+    - Failed, cancelled or unauthenticated runs → nothing.
+  - **Hosted "already generated" dialog:** `existing_audio_count` only counts this session's own packages (`owned_by`).
 - **Cancellation:** a run is cancelled, and the one-run lock released, if its browser tab closes (`Runtime.is_active_session`). It's also cancelled if a Google sign-in isn't completed within `SIGNIN_TIMEOUT_SECONDS` (3 min).
 
 ## AI language check (`ai_language_check.py` + `ai_providers.py`, spec 003)
@@ -82,8 +113,9 @@ There is no separate login page. Sign-in happens when Generate is pressed (web p
     - `fallback_models` are tried in order **only** after a busy (5xx) or not-usable-by-this-key (404) answer. Neither uses tokens. Google's message for each is kept in the report. A 429 or a bad key stops immediately.
     - `python ai_language_check.py --list-models` lists the models the key can use. It's a free lookup.
     - Claude has `effort` (default `low`) and `fallbacks` (default `true`, which sends `fallbacks="default"`; set it to `false` if the API rejects it alongside structured output).
-  - **`.env`** is gitignored, with `.env.example` as the template. It holds `GEMINI_API_KEY=` and `ANTHROPIC_API_KEY=`, read by `read_env_file` (no python-dotenv). Real environment variables win over `.env`. An `api_key` in `config.json` is ignored.
+  - **`.env`** is gitignored, with `.env.example` as the template. It holds `GEMINI_API_KEY=` and `ANTHROPIC_API_KEY=`, plus optional `ANTHROPIC_WORKSPACE_ID=` (only for a Claude key that isn't scoped to a workspace; sent as the `anthropic-workspace-id` header), read by `read_env_file` (no python-dotenv). Real environment variables win over `.env`, which is how Cloud Run's secret is picked up. Keys are whitespace-stripped. With `FTM_HOSTED=1` (`is_hosted()`), the "not configured" reason names the missing Cloud Run secret instead of `.env`, and `app.py` drops its `.env.example` hint. An `api_key` in `config.json` is ignored.
   - It never switches to the other provider silently.
+- **Token usage:** each reviewer turns the API's usage into the same dict (`claude_usage` / `gemini_usage`): `input_tokens`, `output_tokens` (thinking included, since it's billed as output), `thinking_tokens` (Gemini only), cache read/write counts. It's saved in the cache entry (`usage`) and in the report (`result["usage"]`, with `result["model"]` = the model that actually answered). A progress line `🤖 AI check: <model>, tokens: input N, output N, total N` goes to the AI log, and `render_ai_usage` shows model + input/output tokens under the AI section heading when the "Show tokens used" toggle is on. A cached run used 0 tokens and shows the earlier request's counts. An answer that was billed but unusable (cut off, refused, unreadable) still reports its usage.
 - **Output contract:** `🤖 AI check:` and `⚠ AI check:` progress lines, then a last line `🤖 AI report: <json>`. Never use `❌` for findings, or `app.py` would count them as pipeline errors.
 
 ## Pipeline architecture (`generate_language.py`)
@@ -96,12 +128,12 @@ Before step 0, `lang_paths.validate_language_name` rejects anything except lette
 3. **`fetch_lang_sheet`**: in the Drive folder `18SRLdZK-...`, find the spreadsheet whose name **exactly** matches the language, ignoring case and any `.xlsx`/`.xls` extension (`is_exact_name`). Drive's `name contains` query only narrows the list. If it's an Excel file, first copy it to a Google Sheet (a `_converted` copy stays in Drive). Read the **hyperlink in cell `metadata!D1`** (`run_unity_check.py`). That's the Unity/Cloud Function URL that generates the game JSON. `fetch_unity_json` accepts only `https://` URLs, with a timeout, and saves the result to `lang_paths.json_path(lang)`.
 4. **`fetch_drive_audios`**: under root folder `1ObyoMA9...`, find the subfolder whose name exactly matches the language, ignoring case (`search_folder(..., exact=True)`). Inside it, find the `Feed the Monster` subfolder, which is still matched by substring. Recursively download every `.mp3/.wav/.ogg/.m4a`. Drive file names are untrusted: `download_convert_to_mp3` uses only the sanitized base name and skips any name that would land outside `audios/`. Don't go back to substring matching for the language: `English` used to pick up `EnglishWestAfrican`.
    - **"Step 3b"** (as the code numbers it) runs only if the JSON contains Drive share links in place of audio URLs (e.g. `FeedbackAudios: ".../file/d/<id>/view?usp=sharing"`). `download_json_drive_links` in `fetch_drive_audios.py` downloads each linked file as `<Drive file name>.mp3`. It overwrites any same-named file from step 4 and adds a `_<id[:6]>` suffix when two links have the same name. It then **rewrites the link in `ftm_<lang>.json`** to `<audio URL prefix used elsewhere in the JSON><name>.mp3`, so steps 5 and 6 match it by basename.
-5. **`clean_unused_audios`**: `find_used_audios` builds the set of basenames from `Levels[].Puzzles[].prompt.PromptAudio`, `FeedbackAudios[]` and `OtherAudios{}` in the JSON. Any other audio file is deleted (`🗑 Deleted:`), except `great.mp3` and `amazing.mp3`. The exception is a file that matches a required-but-missing name under `normalize_audio_name` (NFC, casefold, Devanagari `ा+े`→`ो` and `ा+ै`→`ौ`). That file is **kept as is, never renamed**, and reported as `🔍 Look-alike: <drive file> ≈ <json name>` for the team to check. The JSON name is then reported missing. Constitution III says never auto-correct names on the basis of similarity (user decision, 2026-10-06).
+5. **`clean_unused_audios`**: `find_used_audios` builds the set of basenames from `Levels[].Puzzles[].prompt.PromptAudio`, `FeedbackAudios[]` and `OtherAudios{}` in the JSON. Any other audio file is deleted (`🗑 Deleted:`), except `great.mp3` and `amazing.mp3`. The exception is a file that matches a required-but-missing name under `normalize_audio_name` (NFC, casefold, standard vowel signs). That file is **kept as is, never renamed**, and reported as `🔍 Look-alike: <drive file> ≈ <json name>` for the team to check. The JSON name is then reported missing. Since vowel signs are already standardized (below), in practice this now only catches upper/lowercase differences.
 6. **`check_missing_audios`**: the reverse check, using the same `find_used_audios`. It only prints the results and never fails the run.
 
-The Streamlit UI (`app.py`) parses the `🗑 Deleted:`, `🔍 Look-alike:`, `❌ Missing audio files:` and `✔ Audio cleanup completed` lines into its "Audio check" summary. Keep those prefixes stable.
+The Streamlit UI (`app.py`) parses the `🗑 Deleted:`, `🔍 Look-alike:`, `🔤 Standard spelling:`, `❌ Missing audio files:` and `✔ Audio cleanup completed` lines into its "Audio check" summary. Keep those prefixes stable.
 
-**Look-alike spellings:** after a run, `lookalike_spellings(lang)` scans the JSON's prompt texts, letters and feedback for `SPELLING_VARIANTS` (`ा+े` instead of `ो`, `ा+ै` instead of `ौ`). The audio summary shows one "Please check: look-alike spellings. Nothing was renamed or changed." warning. It lists the `🔍 Look-alike` file pairs and every look-alike sheet text with its standard form and levels, and the missing-audio list marks names that have a look-alike on Drive. Warn only: never change data on similarity. Example: Marathi's sheet has काे / खाे / ज्ञाे / ङाे / क्षाे typed as `ा+े`.
+**Look-alike vowel signs (auto-fixed, user decision 2026-10-14, overrides the 2026-10-06 warn-only rule for this case):** `spelling.py` holds `SPELLING_VARIANTS` (`ा+े`→`ो`, `ा+ै`→`ौ`) and `standard_spelling`. `download_convert_to_mp3` and `download_json_drive_links` save audio files under the standard spelling, and "Step 3c" in `generate_language.py` runs `standardize_json_file` on `ftm_<lang>.json` before the audio checks, printing `🔤 Standard spelling: <as typed> → <standard> (<n> places)`. `app.py` shows those as one caption line, no warning. Example: Marathi's sheet has काे / खाे / ज्ञाे / ङाे / क्षाे typed as `ा+े`; they now become को / खो / ज्ञो / ङो / क्षो and match Drive's को.mp3 / खो.mp3. Other look-alikes (upper/lowercase) are still warn-only.
 
 ### Gotchas
 
@@ -115,7 +147,7 @@ The Streamlit UI (`app.py`) parses the `🗑 Deleted:`, `🔍 Look-alike:`, `❌
 - `credentials.json`, an OAuth *desktop* client (command line).
 - `client_secret*.json`, including `language_automation/client_secret_web.json`, the *web* OAuth client for the page.
 - `token.json`, which holds a refresh token with full Drive scope.
-- `.env` anywhere (AI API keys, in `language_automation/.env`), except `.env.example`; and `language_automation/.ai_cache/`.
+- `.env` anywhere (AI API keys, in `language_automation/.env`), except `.env.example`; and `language_automation/.ai_cache/`. The same files must stay excluded in `.dockerignore`.
 - `.venv/`, the generated `lang/` data and `.claude/settings.local.json`.
 
 Never hardcode credentials. Use environment variables or local untracked files.

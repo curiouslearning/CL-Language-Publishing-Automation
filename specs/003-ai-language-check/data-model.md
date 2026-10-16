@@ -36,13 +36,14 @@ point at the wrong place.
 | Field | Type | Notes |
 |---|---|---|
 | `provider` | `gemini` \| `claude` | FR-018 |
-| `model` | string | |
+| `model` | string | The model that actually answered (a fallback model when one answered). Spec 006. |
 | `assumed_language` | string | From the first successful batch |
 | `status` | `completed` \| `unavailable` \| `cannot_judge` | See the transitions below. A failed call is `unavailable` with its reason (FR-019). |
 | `reason` | string | Required unless `completed` |
 | `items_total` | int | |
 | `approx_tokens` | int | Characters of the request ÷ 4 (informational) |
 | `cached` | bool | true means no API call was made (FR-021) |
+| `usage` | Token Usage or null | *(spec 006)* Real counts from the API: `input_tokens`, `output_tokens` (thinking included), `thinking_tokens` (Gemini; null for Claude), `cache_read_tokens`, `cache_write_tokens`. Also stored in the cache entry; when `cached` is true these are the earlier request's counts and this run used 0. Null when no answer was received. |
 | `checked_at` | ISO date-time | When the AI call was actually made. Kept when the result is reused from the cache. |
 | `warnings` | list of AI Warning | Sorted high → medium → low, then by first location |
 
