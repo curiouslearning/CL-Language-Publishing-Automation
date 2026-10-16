@@ -52,4 +52,4 @@
   - the Cloud Build service agent's `roles/secretmanager.admin`;
   - the Compute default SA's `roles/run.admin` and its `iam.serviceAccountUser` on `ftm-generator-run`.
 - [ ] T012 (user) GitHub → `curiouslearning` org Settings → GitHub Apps → **Google Cloud Build** → Uninstall, or remove this repo from it if other repos use it.
-- [ ] T013 Mark spec 010 Implemented. In GitHub branch protection for `main`, switch the required check from `ftm-pr-check` to CircleCI's `test`, if one was set (needs a repo admin).
+- [X] T013 Mark spec 010 Implemented. In GitHub branch protection for `main`, switch the required check from `ftm-pr-check` to CircleCI's `test`, if one was set (needs a repo admin).

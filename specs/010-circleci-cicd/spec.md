@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-16
 
-**Status**: Draft
+**Status**: Implemented (2026-10-16). Deploys run from CircleCI (first: revision 00005 @ b1a9b0b; trimmed config: 00006 @ 739719d).
 
 **Input**: User description: "Switch the PR checks and deploy-on-merge from Google Cloud Build to CircleCI, like our other projects: add config.yml, set the project up on CircleCI, then remove the Google Cloud Build automation and the settings it no longer needs."
 

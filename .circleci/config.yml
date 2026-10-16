@@ -53,7 +53,7 @@ commands:
                   [ "$STATUS" = QUEUED ] || [ "$STATUS" = WORKING ]; do sleep 15; done
             sleep 10  # Cloud Logging lags slightly behind the build
             gcloud logging read "resource.type=\"build\" AND resource.labels.build_id=\"${BUILD_ID}\"" \
-              --order=asc --limit=10000 --format='value(textPayload)'
+              --order=asc --limit=10000 --format='value(textPayload)' || echo "(log not readable; use the link above)"
             if [ "$STATUS" != SUCCESS ]; then
               STEP=$(gcloud builds describe "$BUILD_ID" --region=us-central1 --flatten=steps \
                 --filter='steps.status=FAILURE OR steps.status=TIMEOUT' --format='value(steps.id)' | head -n 1)

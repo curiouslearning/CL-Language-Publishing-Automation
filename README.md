@@ -60,11 +60,11 @@ The individual steps (`fetch_lang_sheet.py`, `fetch_drive_audios.py`, `check_mis
 The web page runs on Cloud Run in the `ftm-language-generator` project. `cloudbuild.yaml` builds the `Dockerfile` image, pushes it to Artifact Registry (repo `ftm`) and deploys it. It uses one instance, scales to zero, and has the page's own curiouslearning.org sign-in in front.
 
 **How deploys happen (CircleCI, spec 010):** the same CircleCI setup as our other projects (`.circleci/config.yml`).
-- **Every branch and PR** runs `test`: `pip install -r requirements.txt`, compile the Python code, and build the Docker image. Nothing is pushed or deployed. The result shows as a check on the PR. (Same layout as FeedTheMonsterJS: a test job, then `build-and-deploy-prod` on `main`, which requires it.)
+- **Every branch and PR** runs `test`: compile the Python code and build the Docker image. Nothing is pushed or deployed. The result shows as a check on the PR. (Same layout as FeedTheMonsterJS: a test job, then `build-and-deploy-prod` on `main`, which requires it.)
 - **Every merge or push to `main`** runs `test`, then `build-and-deploy-prod`. CircleCI signs in to Google Cloud with its OIDC token (no key stored anywhere) as `ftm-deployer`, and runs `cloudbuild.yaml`.
   - A merge that only changes docs or specs (`*.md`, `specs/`, `.specify/`, `.claude/`, `.github/`) is skipped.
   - If two merges overlap, the newer build wins: an older one that finishes last doesn't deploy.
-- **Status and errors:** the check on the GitHub commit/PR, and the job log in CircleCI. Each step starts with ▶ and ends with ✅ / ⏭️ / ❌ and a one-line reason. The deploy job prints the full Cloud Build log, names the failed Cloud Build step, and saves the log under **Artifacts → cloudbuild/cloudbuild.log**, even when it fails.
+- **Status and errors:** the check on the GitHub commit/PR, and the job log in CircleCI. A failure ends with a ❌ line saying what failed. The deploy job prints the full Cloud Build log and a link to it, and names the failed Cloud Build step.
 - **Merge code changes only when nobody is generating a language.** A deploy replaces the running server and cancels a run in progress.
 
 **One-time setup** (a project Owner, from the repo root, in Git Bash; region `us-central1`, service `ftm-language-generator`):

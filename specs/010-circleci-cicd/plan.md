@@ -76,6 +76,6 @@ specs/009-…/spec.md      # Status: superseded
   - no orbs (the sign-in is plain `gcloud`; the deploy image is `google/cloud-sdk:slim` because it needs `gcloud`);
   - the test job is Python: `pip install`, `compileall`, `docker build`.
 - **Logs:**
-  - every step prints ▶ … then ✅ / ⏭️ / ❌ with a one-line reason;
-  - the deploy prints Cloud Build progress per step and the full Cloud Build log (`ftm-deployer` gets `roles/logging.viewer`), and saves it as the artifact `cloudbuild/cloudbuild.log` even on failure;
-  - the final "Deploy result" step fails the job and names the failed Cloud Build step and its reason.
+  - a failure ends with a ❌ line saying what failed (missing context, refused sign-in, build not started, failed Cloud Build step and its reason);
+  - the deploy prints the full Cloud Build log (`ftm-deployer` gets `roles/logging.viewer`) and a console link.
+  - **Trimmed (user request):** no parameters, artifacts, progress lines or result file. The test job doesn't run `pip install` separately, because `docker build` installs `requirements.txt` anyway.
