@@ -1,0 +1,18 @@
+# Allow-list: only the dependencies and the scripts go into the image
+*
+!requirements.txt
+!language_automation/
+
+# Never in the image: secrets, generated data, caches
+language_automation/.env
+language_automation/.env.*
+language_automation/credentials.json
+language_automation/token.json
+language_automation/client_secret*.json
+language_automation/**/*.pem
+language_automation/**/*.key
+language_automation/.ai_cache/
+language_automation/lang/
+language_automation/.streamlit/secrets.toml
+**/__pycache__/
+**/*.py[cod]

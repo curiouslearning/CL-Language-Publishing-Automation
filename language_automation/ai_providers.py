@@ -97,6 +97,11 @@ def read_env_file(path=ENV_PATH):
     return values
 
 
+def is_hosted():
+    """True on the Cloud Run deploy (FTM_HOSTED=1 is set by cloudbuild.yaml)."""
+    return os.environ.get("FTM_HOSTED") == "1"
+
+
 def load_config():
     """(config, reason): reason is None when the chosen provider is usable, else why not."""
     cfg = copy.deepcopy(DEFAULTS)
@@ -116,7 +121,8 @@ def load_config():
     # API keys: real environment variables win over the .env file
     env_file = read_env_file()
     for name, env in ENV_KEYS.items():
-        cfg[name]["api_key"] = os.environ.get(env) or env_file.get(env, "")
+        # stripped: a secret saved with a trailing newline would otherwise look like a rejected key
+        cfg[name]["api_key"] = (os.environ.get(env) or env_file.get(env, "")).strip()
     cfg["claude"]["workspace_id"] = str(os.environ.get(WORKSPACE_ENV) or env_file.get(WORKSPACE_ENV)
                                         or cfg["claude"]["workspace_id"] or "").strip()
 
@@ -127,6 +133,9 @@ def load_config():
     if cfg["claude"]["effort"] not in EFFORTS:
         cfg["claude"]["effort"] = DEFAULTS["claude"]["effort"]
     if not str(cfg[provider]["api_key"]).strip():
+        if is_hosted():  # on Cloud Run the key comes from Secret Manager, not .env (spec 007)
+            return cfg, (f"no API key configured for {provider}: the Cloud Run service has no "
+                         f"{ENV_KEYS[provider]} secret attached (README \"Deploy to Cloud Run\")")
         return cfg, f"no API key configured for {provider}: add {ENV_KEYS[provider]}=... to language_automation/.env"
     return cfg, None
 

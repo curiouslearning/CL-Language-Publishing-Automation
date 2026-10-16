@@ -19,6 +19,8 @@ python ai_language_check.py <Language>          # uses config.json (service, mod
 | `🤖 AI check: using <provider> (<model>)` | Start. The service used is named (FR-018). |
 | `🤖 AI check: <n> items to check (~<t> tokens, 1 request)` | Size, with an approximate token count (characters ÷ 4) |
 | `🤖 AI check: content unchanged since <date>, reusing earlier result (no API call)` | A cache hit (FR-021) |
+| `🤖 AI check: <model>, tokens: input <i>, output <o>[ (incl. <t> thinking)], total <n>` | *(spec 006)* Real token counts after an answer, including a billed answer that couldn't be used |
+| `🤖 AI check: tokens used this run: 0 (cached). <model>, the earlier request used: input …` | *(spec 006)* Cache hit: no tokens this run, plus the earlier request's counts (or "weren't recorded") |
 | `🤖 AI check: done (<w> warnings)` | The single request finished |
 | `⚠ AI check: <message>` | Non-fatal problem, e.g. a rate limit, refusal or truncated batch |
 | `🤖 AI report: <json>` | **Last line.** The full AI Check Result ([data-model.md](../data-model.md)) as one line of JSON |
@@ -45,7 +47,12 @@ API keys:
 ```dotenv
 GEMINI_API_KEY=...
 ANTHROPIC_API_KEY=...
+ANTHROPIC_WORKSPACE_ID=   # optional (2026-10-14): only for a Claude key not scoped to a workspace
 ```
+
+- `ANTHROPIC_WORKSPACE_ID`, when set, is sent as the `anthropic-workspace-id` header on every
+  Claude request. A key that isn't scoped to a workspace is rejected without it; the message then
+  says to add it or to use a workspace-scoped key.
 
 - Real environment variables win over `.env`.
 - An `api_key` placed in `config.json` is ignored.
@@ -63,6 +70,12 @@ ANTHROPIC_API_KEY=...
   - **Off by default.** It keeps its value for the session, and is `disabled` while busy, like
     Generate.
   - Its caption shows the configured provider, or "not configured".
+- **Show tokens used** *(spec 006)*: when the AI check is on, an indented
+  `st.toggle("🔢 Show tokens used", key="show_tokens_toggle")` appears under it. Off by default,
+  disabled while busy; its value is kept in `st.session_state.show_tokens`, so it survives the AI
+  check being switched off and on. When on, every AI section shows
+  "**Model:** `<model>` · **Input tokens:** N · **Output tokens:** N (incl. N thinking) · **Total:** N"
+  under its heading (cached: plus "this run used 0 tokens"). It only changes the display.
 - **During a run with the toggle on**: after the pipeline's steps, the run's box shows
   "🤖 AI language check in progress…". On a cache hit it shows "From earlier check on <date>:
   content unchanged".

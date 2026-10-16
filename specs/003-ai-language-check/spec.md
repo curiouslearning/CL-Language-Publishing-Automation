@@ -51,6 +51,11 @@ works for whatever language name the user enters, so there is no per-language se
 - The AI output has its own log, and appears right after the unused-audio result (FR-012).
 - The page's general flow is in spec 004.
 
+### Session 2026-10-14
+
+- Real token counts (input/output) and the answering model are recorded for every check and can be
+  shown with a "Show tokens used" toggle under the AI check toggle. See spec 006.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Get AI warnings about wrong letters, words and sentences (Priority: P1)

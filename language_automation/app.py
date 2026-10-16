@@ -14,6 +14,7 @@ from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 import ai_providers
 import lang_paths
+import package_store
 import web_signin
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -66,6 +67,14 @@ def session_is_open():
 def session_alive(session_id):
     """True while the browser tab of that Streamlit session is still connected."""
     return Runtime.exists() and Runtime.instance().is_active_session(session_id)
+
+
+@st.cache_resource
+def package_janitor():
+    """Hosted only (spec 008): delete a session's language packages once that session has ended."""
+    if ai_providers.is_hosted():
+        package_store.start_janitor(session_alive)
+    return True
 
 
 @st.cache_resource
@@ -316,118 +325,126 @@ def run_pipeline(lang, after=None):
     signin = st.session_state.google_signin
     result["account"] = signin["email"]
 
-    # This run's Google access goes to the pipeline only (never to the AI check, never to disk)
-    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8",
-               FTM_GOOGLE_CREDENTIALS=json.dumps(signin["info"]))
-    proc = subprocess.Popen(
-        [sys.executable, "-u", PIPELINE, lang],
-        cwd=APP_DIR,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-        env=env,
-    )
-
-    # Read output on a thread so the UI keeps refreshing while a long download prints nothing
-    lines = queue.Queue()
-
-    def reader():
-        for raw in proc.stdout:
-            lines.put(raw.rstrip("\n"))
-        lines.put(None)
-
-    threading.Thread(target=reader, daemon=True).start()
-    render()
-
-    cancel_reason = None
+    # Spec 008: from here on lang/<lang>/ belongs to this run and page session. Until finish(), the
+    # package is 'being generated' (no download, never cleaned up).
+    result["package_id"] = package_store.claim(lang, get_script_run_ctx().session_id)
     try:
-        finished = False
-        while not finished:
-            changed = False
-            try:
-                line = lines.get(timeout=REFRESH_SECONDS)
-                while True:
-                    if line is None:
-                        finished = True
-                        break
-                    handle(line)
-                    changed = True
-                    line = lines.get_nowait()
-            except queue.Empty:
-                pass
-
-            # Stop instead of holding the one-run lock forever
-            if not finished:
-                if not session_is_open():
-                    cancel_reason = "The browser tab was closed"
-                elif ui["signin_since"] and time.monotonic() - ui["signin_since"] > SIGNIN_TIMEOUT_SECONDS:
-                    cancel_reason = "Google sign-in wasn't completed"
-                if cancel_reason:
-                    proc.kill()
-                    break
-
-            if changed:
-                render()
-        proc.wait()
-    finally:
-        # Streamlit interrupts this script on rerun; don't leave an orphaned run behind.
-        if proc.poll() is None:
-            proc.kill()
-
-    if cancel_reason:
-        result["state"] = "cancelled"
-        touched = ui["step"] is not None and ui["step"] >= WIPE_STEP
-        detail = (
-            f"lang/{lang} may be incomplete, so generate it again."
-            if touched
-            else "Nothing was created or deleted."
+        # This run's Google access goes to the pipeline only (never to the AI check, never to disk)
+        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8",
+                   FTM_GOOGLE_CREDENTIALS=json.dumps(signin["info"]))
+        proc = subprocess.Popen(
+            [sys.executable, "-u", PIPELINE, lang],
+            cwd=APP_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=env,
         )
-        result["log"].append(f"⏹️ Run cancelled: {cancel_reason}. {detail}")
-        if result["authenticated"]:
-            ui["note"] = ("warning", f"⏹️ Run cancelled: {cancel_reason}. {detail}")
-        else:
-            ui["auth"] = ("warning", f"⏹️ Authentication cancelled: {cancel_reason}. {detail}")
-        render()
-        render_steps(final_state="error")
-        status.update(label=f"**{lang}** · Cancelled", state="error", expanded=True)
-    elif not result["authenticated"]:
-        # The pipeline refused this sign-in (expired, revoked, or not a Curious Learning account):
-        # it stopped before Step 1. Forget it so the next Generate asks Google again.
-        st.session_state.pop("google_signin", None)
-        result["state"] = "error"
-        ui["auth"] = ("error", "❌ Authentication failed. Nothing was created or deleted.")
-        if not result["errors"]:
-            result["errors"].append("\n".join(result["log"][-15:]))
-            errors_box.error("\n\n".join(result["errors"]))
-        render()
-        status.update(label=f"**{lang}** · Authentication failed", state="error", expanded=True)
-    elif proc.returncode != 0:
-        result["state"] = "error"
-        if not result["errors"]:
-            # Uncaught exception: show the traceback tail.
-            result["errors"].append("\n".join(result["log"][-15:]))
-            errors_box.error("\n\n".join(result["errors"]))
-        ui["note"] = ("error", f"❌ The pipeline stopped with an error (exit code {proc.returncode}).")
-        render()
-        render_steps(final_state="error")
-        status.update(label=f"**{lang}** · Failed", state="error", expanded=True)
-    elif result["errors"]:
-        result["state"] = "warning"
-        ui["note"] = ("warning", "⚠️ The pipeline finished, but some steps reported errors. See above.")
-        render()
-        render_steps(final_state="complete")
-        status.update(label=f"**{lang}** · Finished with errors", state="error", expanded=True)
-    else:
-        result["state"] = "complete"
-        render()
-        render_steps(final_state="complete")
-        status.update(label=f"**{lang}** · Completed", state="complete", expanded=True)
 
-    if after:
-        after(result, status)
+        # Read output on a thread so the UI keeps refreshing while a long download prints nothing
+        lines = queue.Queue()
+
+        def reader():
+            for raw in proc.stdout:
+                lines.put(raw.rstrip("\n"))
+            lines.put(None)
+
+        threading.Thread(target=reader, daemon=True).start()
+        render()
+
+        cancel_reason = None
+        try:
+            finished = False
+            while not finished:
+                changed = False
+                try:
+                    line = lines.get(timeout=REFRESH_SECONDS)
+                    while True:
+                        if line is None:
+                            finished = True
+                            break
+                        handle(line)
+                        changed = True
+                        line = lines.get_nowait()
+                except queue.Empty:
+                    pass
+
+                # Stop instead of holding the one-run lock forever
+                if not finished:
+                    if not session_is_open():
+                        cancel_reason = "The browser tab was closed"
+                    elif ui["signin_since"] and time.monotonic() - ui["signin_since"] > SIGNIN_TIMEOUT_SECONDS:
+                        cancel_reason = "Google sign-in wasn't completed"
+                    if cancel_reason:
+                        proc.kill()
+                        break
+
+                if changed:
+                    render()
+            proc.wait()
+        finally:
+            # Streamlit interrupts this script on rerun; don't leave an orphaned run behind.
+            if proc.poll() is None:
+                proc.kill()
+
+        if cancel_reason:
+            result["state"] = "cancelled"
+            touched = ui["step"] is not None and ui["step"] >= WIPE_STEP
+            detail = (
+                f"lang/{lang} may be incomplete, so generate it again."
+                if touched
+                else "Nothing was created or deleted."
+            )
+            result["log"].append(f"⏹️ Run cancelled: {cancel_reason}. {detail}")
+            if result["authenticated"]:
+                ui["note"] = ("warning", f"⏹️ Run cancelled: {cancel_reason}. {detail}")
+            else:
+                ui["auth"] = ("warning", f"⏹️ Authentication cancelled: {cancel_reason}. {detail}")
+            render()
+            render_steps(final_state="error")
+            status.update(label=f"**{lang}** · Cancelled", state="error", expanded=True)
+        elif not result["authenticated"]:
+            # The pipeline refused this sign-in (expired, revoked, or not a Curious Learning account):
+            # it stopped before Step 1. Forget it so the next Generate asks Google again.
+            st.session_state.pop("google_signin", None)
+            result["state"] = "error"
+            ui["auth"] = ("error", "❌ Authentication failed. Nothing was created or deleted.")
+            if not result["errors"]:
+                result["errors"].append("\n".join(result["log"][-15:]))
+                errors_box.error("\n\n".join(result["errors"]))
+            render()
+            status.update(label=f"**{lang}** · Authentication failed", state="error", expanded=True)
+        elif proc.returncode != 0:
+            result["state"] = "error"
+            if not result["errors"]:
+                # Uncaught exception: show the traceback tail.
+                result["errors"].append("\n".join(result["log"][-15:]))
+                errors_box.error("\n\n".join(result["errors"]))
+            ui["note"] = ("error", f"❌ The pipeline stopped with an error (exit code {proc.returncode}).")
+            render()
+            render_steps(final_state="error")
+            status.update(label=f"**{lang}** · Failed", state="error", expanded=True)
+        elif result["errors"]:
+            result["state"] = "warning"
+            ui["note"] = ("warning", "⚠️ The pipeline finished, but some steps reported errors. See above.")
+            render()
+            render_steps(final_state="complete")
+            status.update(label=f"**{lang}** · Finished with errors", state="error", expanded=True)
+        else:
+            result["state"] = "complete"
+            render()
+            render_steps(final_state="complete")
+            status.update(label=f"**{lang}** · Completed", state="complete", expanded=True)
+
+        if after:
+            after(result, status)
+    finally:
+        # Stopped before "Prepare a clean language folder": the folder is untouched, so its earlier owner keeps it
+        touched = result["authenticated"] and ui["step"] is not None and ui["step"] >= WIPE_STEP
+        package_store.finish(lang, result["package_id"], touched=touched)
 
     with status:
         render_summary(result)
@@ -576,7 +593,32 @@ def render_summary(result):
         count = len([f for f in os.listdir(audios_dir) if f.lower().endswith(".mp3")])
         st.caption(f"📂 {count} mp3 file(s) in `lang/{result['lang'].lower()}/audios`")
 
+    render_package(result, stamp)
     st.download_button(**log_button)
+
+
+def render_package(result, stamp):
+    """Spec 008: the language package as a zip, built only when clicked (on a worker thread, no rerun)."""
+    lang, pid = result["lang"], result.get("package_id")
+    state = package_store.availability(lang, pid, result["state"])
+    if state == "available":
+        st.download_button(
+            "📦 Download language package (.zip)",
+            data=lambda lang=lang, pid=pid: package_store.build_zip(lang, pid),
+            file_name=f"{lang}_{stamp}.zip",
+            mime="application/zip",
+            key=f"pkg_{lang}_{result['started']}",
+            on_click="ignore",  # a rerun would interrupt (and kill) a run in progress
+            type="primary",
+        )
+        st.caption("Kept on the server only until you close or reload this page. Download it now."
+                   if ai_providers.is_hosted() else f"Also saved in `lang/{lang.strip().lower()}/` on this computer.")
+    elif state == "regenerating":
+        st.caption(f"📦 {lang} is being generated again right now, so this package isn't available.")
+    elif state == "replaced":
+        st.caption(f"📦 This package was replaced by a later run of {lang}. Download it from that run.")
+    elif state == "gone":
+        st.caption(f"📦 This package is no longer on the server. Generate {lang} again to get it.")
 
 
 def render_ai_log(result, stamp):
@@ -673,6 +715,9 @@ STATE_ICONS = {"complete": "✅", "warning": "⚠️", "error": "❌", "running"
 
 def existing_audio_count(lang):
     """Number of mp3s if lang/<lang>/ already has its game JSON and audios (a finished earlier run), else 0."""
+    # Hosted (spec 008): only this session's own packages count; another session's is regenerated and taken over
+    if ai_providers.is_hosted() and not package_store.owned_by(lang, get_script_run_ctx().session_id):
+        return 0
     audios = lang_paths.audios_dir(lang)
     if not os.path.isfile(lang_paths.json_path(lang)) or not os.path.isdir(audios):
         return 0
@@ -742,6 +787,7 @@ def show_run(res, expanded):
 
 
 st.set_page_config(page_title="FTM Language Generator", page_icon="🌍")
+package_janitor()
 
 # Web Google sign-in settings (spec 005). Missing or invalid: nothing can be generated (fail closed).
 try:
@@ -787,7 +833,8 @@ st.toggle("🤖 AI language check", key="ai_check", value=False, disabled=busy,
           help="After generating, an AI reviews the language's letters, words and feedback sentences "
                "and suggests corrections. One request per language; unchanged content isn't sent again.")
 if st.session_state.ai_check:
-    st.caption(f"Not configured: {ai_reason}. See `.env.example`." if ai_reason
+    st.caption(f"Not configured: {ai_reason}." + ("" if ai_providers.is_hosted() else " See `.env.example`.")
+               if ai_reason
                else f"Uses {ai_cfg['provider']} ({ai_cfg[ai_cfg['provider']]['model']}).")
     # Show tokens used (spec 006): only under the AI check, off by default. The choice is kept in
     # show_tokens, so it survives the AI toggle being switched off and on (Streamlit drops the
