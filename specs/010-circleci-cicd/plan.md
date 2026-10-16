@@ -27,6 +27,7 @@
   - add `cloudbuild.builds.editor` (which replaces `builds.viewer`), `serviceusage.serviceUsageConsumer`, `iam.serviceAccountUser` on itself (the build runs as itself), and `storage.admin` on bucket `ftm-language-generator_cloudbuild` only (source upload; replaces `objectViewer`);
   - enable APIs `iamcredentials` and `sts`;
   - still no Secret Manager access.
+- **R3a, implementation finding (2026-10-16):** the first CircleCI deploy failed with "forbidden from accessing the bucket [ftm-language-generator_cloudbuild]". With the *default* staging bucket, `gcloud builds submit` first checks bucket ownership by listing the project's buckets, which `ftm-deployer` (bucket-level access only) can't do. The job now passes `--gcs-source-staging-dir=gs://ftm-language-generator_cloudbuild/source`, which skips that check. This was reproduced and verified by impersonating `ftm-deployer`: the default bucket fails, the explicit dir succeeds. No broader storage permission is needed.
 - **R4, docs-only skip:** `git diff --name-only HEAD^1 HEAD`. If every file matches `*.md`, `specs/`, `.specify/`, `.claude/` or `.github/`, the job halts with `circleci-agent step halt`, which counts as success. This is simpler than dynamic config with the path-filtering orb.
 - **R5, ordering:**
   1. set up the CircleCI project and OIDC;

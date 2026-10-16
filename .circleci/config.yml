@@ -58,8 +58,11 @@ jobs:
       - run:
           name: Build and deploy to Cloud Run (cloudbuild.yaml)
           no_output_timeout: 30m
+          # The explicit staging dir matters: with the default bucket, gcloud first lists the project's
+          # buckets, which ftm-deployer (access to this one bucket only) isn't allowed to do.
           command: |
             gcloud builds submit --config cloudbuild.yaml --region="$GCP_REGION" \
+              --gcs-source-staging-dir="gs://${GCP_PROJECT}_cloudbuild/source" \
               --substitutions=_COMMIT_SHA="${CIRCLE_SHA1:0:7}"
 
 workflows:

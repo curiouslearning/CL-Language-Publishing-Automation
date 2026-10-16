@@ -17,14 +17,14 @@
 
 ## Phase 2: Foundational (needs the CircleCI IDs)
 
-- [ ] T004 (user) In CircleCI, get the **organization ID** (Organization Settings → Overview) and, after setting up the project (T006), its **project ID** (Project Settings → Overview).
-- [ ] T005 (cloud) Create OIDC provider `circleci-oidc` in pool `circleci`:
+- [X] T004 (user) In CircleCI, get the **organization ID** (Organization Settings → Overview) and, after setting up the project (T006), its **project ID** (Project Settings → Overview).
+- [X] T005 (cloud) Create OIDC provider `circleci-oidc` in pool `circleci`:
   - issuer `https://oidc.circleci.com/org/<org id>`, audience `<org id>`;
   - mapping `google.subject=assertion.sub,attribute.project_id=assertion['oidc.circleci.com/project-id']`;
   - condition `attribute.project_id=='<project id>'`.
 
   Then bind `roles/iam.workloadIdentityUser` on `ftm-deployer` to `principalSet://iam.googleapis.com/projects/838897084130/locations/global/workloadIdentityPools/circleci/attribute.project_id/<project id>`.
-- [ ] T006 (user) In CircleCI:
+- [X] T006 (user) In CircleCI:
   - set up project `CL-Language-Publishing-Automation`: "Set Up Project" → use the existing `.circleci/config.yml` from branch `010-circleci-cicd`;
   - create the context `ftm-language-generator-gcp` (Organization Settings → Contexts), empty, optionally restricted to this project.
 
@@ -34,7 +34,7 @@
 
 ## Phase 4: User Story 1 - Deploy on merge via CircleCI (P1)
 
-- [ ] T008 (cloud) Delete the Cloud Build trigger `ftm-deploy-main` **before** merging, so the merge deploys once (through CircleCI).
+- [X] T008 (cloud) Delete the Cloud Build trigger `ftm-deploy-main` **before** merging, so the merge deploys once (through CircleCI).
 - [ ] T009 (user) Merge the PR when nobody is generating. Confirm:
   - CircleCI `deploy` succeeds;
   - the new revision is labeled `commit-sha=<merge sha7>`;
