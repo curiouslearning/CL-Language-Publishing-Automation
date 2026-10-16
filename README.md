@@ -60,11 +60,11 @@ The individual steps (`fetch_lang_sheet.py`, `fetch_drive_audios.py`, `check_mis
 The web page runs on Cloud Run in the `ftm-language-generator` project. `cloudbuild.yaml` builds the `Dockerfile` image, pushes it to Artifact Registry (repo `ftm`) and deploys it. It uses one instance, scales to zero, and has the page's own curiouslearning.org sign-in in front.
 
 **How deploys happen (CircleCI, spec 010):** the same CircleCI setup as our other projects (`.circleci/config.yml`).
-- **Every PR** (every branch except `main`) runs `build-check`: the Docker image is built, and nothing is pushed or deployed. The result shows as a check on the PR.
-- **Every merge or push to `main`** runs `deploy`. CircleCI signs in to Google Cloud with its OIDC token (no key stored anywhere) as `ftm-deployer`, and runs `cloudbuild.yaml`.
+- **Every branch and PR** runs `test`: `pip install -r requirements.txt`, compile the Python code, and build the Docker image. Nothing is pushed or deployed. The result shows as a check on the PR. (Same layout as FeedTheMonsterJS: a test job, then `build-and-deploy-prod` on `main`, which requires it.)
+- **Every merge or push to `main`** runs `test`, then `build-and-deploy-prod`. CircleCI signs in to Google Cloud with its OIDC token (no key stored anywhere) as `ftm-deployer`, and runs `cloudbuild.yaml`.
   - A merge that only changes docs or specs (`*.md`, `specs/`, `.specify/`, `.claude/`, `.github/`) is skipped.
   - If two merges overlap, the newer build wins: an older one that finishes last doesn't deploy.
-- **Status:** the check on the GitHub commit/PR, and the job log in CircleCI.
+- **Status and errors:** the check on the GitHub commit/PR, and the job log in CircleCI. Each step starts with ▶ and ends with ✅ / ⏭️ / ❌ and a one-line reason. The deploy job prints the full Cloud Build log, names the failed Cloud Build step, and saves the log under **Artifacts → cloudbuild/cloudbuild.log**, even when it fails.
 - **Merge code changes only when nobody is generating a language.** A deploy replaces the running server and cancels a run in progress.
 
 **One-time setup** (a project Owner, from the repo root, in Git Bash; region `us-central1`, service `ftm-language-generator`):
@@ -95,7 +95,7 @@ gcloud secrets add-iam-policy-binding ftm-gemini-api-key --member=serviceAccount
 # Deploy identity: starts the Cloud Build, pushes to repo ftm, deploys as the runtime account. No secret access.
 gcloud iam service-accounts create ftm-deployer --display-name="FTM deploy (Cloud Build)" --project=$P
 DEP=ftm-deployer@$P.iam.gserviceaccount.com
-for R in roles/run.admin roles/cloudbuild.builds.editor roles/logging.logWriter roles/serviceusage.serviceUsageConsumer; do
+for R in roles/run.admin roles/cloudbuild.builds.editor roles/logging.logWriter roles/logging.viewer roles/serviceusage.serviceUsageConsumer; do
   gcloud projects add-iam-policy-binding $P --member=serviceAccount:$DEP --role=$R --condition=None
 done
 gcloud iam service-accounts add-iam-policy-binding $RUN_SA --member=serviceAccount:$DEP --role=roles/iam.serviceAccountUser --project=$P
@@ -125,7 +125,7 @@ Only `ftm-generator-run` can read the two secrets. Neither CircleCI nor `ftm-dep
 
 The project has billing enabled, so Gemini usage from this key is billed at paid-tier rates. It's small: about 1.5 K input tokens per language (turn on "Show tokens used" to see it). Optionally, set a budget alert on the project in Billing → Budgets & alerts.
 
-**Manual deploy** (emergencies only): `gcloud builds submit --config cloudbuild.yaml --region=us-central1 --project=ftm-language-generator`. It uploads your local files, committed or not, and the next merge to `main` replaces it. To redeploy `main` as it is, rerun the latest `deploy` job in CircleCI.
+**Manual deploy** (emergencies only): `gcloud builds submit --config cloudbuild.yaml --region=us-central1 --project=ftm-language-generator`. It uploads your local files, committed or not, and the next merge to `main` replaces it. To redeploy `main` as it is, rerun the latest `build-and-deploy-prod` job in CircleCI.
 
 **Roll back:** `gcloud run services update-traffic ftm-language-generator --to-revisions=<previous revision>=100 --region=us-central1 --project=ftm-language-generator`. The revisions are listed under Cloud Run → the service → Revisions. The next deploy moves traffic to the new revision again.
 

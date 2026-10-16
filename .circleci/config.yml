@@ -1,80 +1,98 @@
-# CI/CD for the FTM Language Generator (spec 010), the same tool as our other projects.
-# - build-check: every branch except main (i.e. every PR) builds the Docker image. Nothing is pushed or deployed.
-# - deploy: every push/merge to main builds and deploys to Cloud Run through the existing cloudbuild.yaml
-#   (Cloud Build does the build + deploy as ftm-deployer, incl. the "newest build wins" guard).
-# Google Cloud sign-in uses CircleCI's OIDC token + workload identity federation: no key is stored in
-# CircleCI or GitHub. Nothing below is secret.
 version: 2.1
 
-jobs:
-  build-check:
-    docker:
-      - image: cimg/base:current
-    resource_class: small
-    steps:
-      - checkout
-      - setup_remote_docker
-      - run:
-          name: Build the image (check only, nothing pushed or deployed)
-          command: docker build -t ftm-check:${CIRCLE_SHA1:0:7} .
+# Spec 010. Same layout as FeedTheMonsterJS: a test job on every branch, build-and-deploy-prod on main.
+# Google Cloud sign-in uses CircleCI's OIDC token (workload identity federation): no key is stored anywhere.
 
-  deploy:
-    docker:
-      - image: google/cloud-sdk:slim
-    resource_class: small
-    environment:
-      GCP_PROJECT: ftm-language-generator
-      GCP_REGION: us-central1
-      GCP_WIF_PROVIDER: //iam.googleapis.com/projects/838897084130/locations/global/workloadIdentityPools/circleci/providers/circleci-oidc
-      GCP_DEPLOY_SA: ftm-deployer@ftm-language-generator.iam.gserviceaccount.com
+commands:
+  gcloud-login:
+    steps:
+      - run:
+          name: Sign in to Google Cloud (OIDC, no key)
+          command: |
+            if [ -z "${CIRCLE_OIDC_TOKEN:-}" ]; then
+              echo "❌ No OIDC token: the job must use the context 'ftm-language-generator-gcp'."; exit 1
+            fi
+            echo "$CIRCLE_OIDC_TOKEN" > /tmp/oidc_token
+            cat > /tmp/gcp_cred.json \<<EOF
+            {
+              "type": "external_account",
+              "audience": "//iam.googleapis.com/projects/838897084130/locations/global/workloadIdentityPools/circleci/providers/circleci-oidc",
+              "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+              "token_url": "https://sts.googleapis.com/v1/token",
+              "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/ftm-deployer@ftm-language-generator.iam.gserviceaccount.com:generateAccessToken",
+              "credential_source": {"file": "/tmp/oidc_token"}
+            }
+            EOF
+            gcloud auth login --cred-file=/tmp/gcp_cred.json --quiet
+            gcloud config set project ftm-language-generator --quiet
+            gcloud auth print-access-token >/dev/null || { echo "❌ Google Cloud refused the CircleCI sign-in (see README 'One-time setup')."; exit 1; }
+
+  build-and-deploy:
     steps:
       - checkout
       - run:
           name: Skip docs-only changes
           command: |
             CHANGED=$(git diff --name-only HEAD^1 HEAD 2>/dev/null || true)
-            echo "Changed files:"; echo "${CHANGED:-<unknown>}"
-            # Deploy unless every changed file is documentation or a spec (same rule as spec 009)
             if [ -n "$CHANGED" ] && ! echo "$CHANGED" | grep -qvE '(\.md$|^specs/|^\.specify/|^\.claude/|^\.github/)'; then
-              echo "Only docs/specs changed: nothing to deploy."
+              echo "⏭️ Only docs/specs changed: nothing to deploy."
               circleci-agent step halt
             fi
-      - run:
-          name: Sign in to Google Cloud (OIDC, no key)
-          command: |
-            echo "$CIRCLE_OIDC_TOKEN" > /tmp/oidc_token
-            cat > /tmp/gcp_cred.json \<<EOF
-            {
-              "type": "external_account",
-              "audience": "${GCP_WIF_PROVIDER}",
-              "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-              "token_url": "https://sts.googleapis.com/v1/token",
-              "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${GCP_DEPLOY_SA}:generateAccessToken",
-              "credential_source": {"file": "/tmp/oidc_token"}
-            }
-            EOF
-            gcloud auth login --cred-file=/tmp/gcp_cred.json --quiet
-            gcloud config set project "$GCP_PROJECT" --quiet
+      - gcloud-login
       - run:
           name: Build and deploy to Cloud Run (cloudbuild.yaml)
           no_output_timeout: 30m
-          # The explicit staging dir matters: with the default bucket, gcloud first lists the project's
-          # buckets, which ftm-deployer (access to this one bucket only) isn't allowed to do.
+          # --gcs-source-staging-dir: with the default bucket gcloud first lists all buckets, which ftm-deployer can't.
+          # --async + logging read: the build log goes to Cloud Logging only, so it's printed here afterwards.
           command: |
-            gcloud builds submit --config cloudbuild.yaml --region="$GCP_REGION" \
-              --gcs-source-staging-dir="gs://${GCP_PROJECT}_cloudbuild/source" \
-              --substitutions=_COMMIT_SHA="${CIRCLE_SHA1:0:7}"
+            BUILD_ID=$(gcloud builds submit --async --format='value(id)' --config cloudbuild.yaml --region=us-central1 \
+              --gcs-source-staging-dir=gs://ftm-language-generator_cloudbuild/source \
+              --substitutions=_COMMIT_SHA="${CIRCLE_SHA1:0:7}") || { echo "❌ Cloud Build could not be started (see above)."; exit 1; }
+            echo "Cloud Build: https://console.cloud.google.com/cloud-build/builds;region=us-central1/${BUILD_ID}?project=ftm-language-generator"
+            while STATUS=$(gcloud builds describe "$BUILD_ID" --region=us-central1 --format='value(status)'); \
+                  [ "$STATUS" = QUEUED ] || [ "$STATUS" = WORKING ]; do sleep 15; done
+            sleep 10  # Cloud Logging lags slightly behind the build
+            gcloud logging read "resource.type=\"build\" AND resource.labels.build_id=\"${BUILD_ID}\"" \
+              --order=asc --limit=10000 --format='value(textPayload)'
+            if [ "$STATUS" != SUCCESS ]; then
+              STEP=$(gcloud builds describe "$BUILD_ID" --region=us-central1 --flatten=steps \
+                --filter='steps.status=FAILURE OR steps.status=TIMEOUT' --format='value(steps.id)' | head -n 1)
+              echo "❌ Deploy failed: Cloud Build $STATUS in step '${STEP:-unknown}': $(gcloud builds describe "$BUILD_ID" --region=us-central1 --format='value(statusDetail)')"
+              echo "   The site keeps serving the previous version."
+              exit 1
+            fi
+            echo "✅ Deployed commit ${CIRCLE_SHA1:0:7}."
+
+jobs:
+  test:
+    docker:
+      - image: cimg/python:3.13.2
+    steps:
+      - checkout
+      - run:
+          name: Compile the Python code
+          command: python -m compileall -q language_automation || { echo "❌ Python syntax error (file and line above)."; exit 1; }
+      - setup_remote_docker
+      - run:
+          name: Build the Docker image (nothing pushed or deployed)
+          command: docker build -t ftm-check . || { echo "❌ Docker build failed (usually requirements.txt or the Dockerfile; see above)."; exit 1; }
+
+  build-and-deploy-prod:
+    docker:
+      - image: google/cloud-sdk:slim
+    steps:
+      - build-and-deploy
 
 workflows:
-  check-and-deploy:
+  cloud-run-deploy-workflow:
     jobs:
-      - build-check:
+      - test
+      - build-and-deploy-prod:
+          context:
+            - ftm-language-generator-gcp
+          requires:
+            - test
           filters:
             branches:
-              ignore: main
-      - deploy:
-          # The OIDC token is only issued to jobs that use a context
-          context: ftm-language-generator-gcp
-          filters:
-            branches:
-              only: main
+              only:
+                - main

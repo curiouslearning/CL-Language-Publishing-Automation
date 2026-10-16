@@ -20,7 +20,7 @@ This spec replaces the **trigger** side of spec 009. The deploy itself (`cloudbu
 
 A PR is merged into `main`. CircleCI runs a deploy job that builds and deploys the generator to the existing Cloud Run service. The merge commit on GitHub shows CircleCI's status with a link to the job.
 
-**Independent Test**: merge a small code change. The CircleCI `deploy` job succeeds, and the new Cloud Run revision carries that commit's short SHA.
+**Independent Test**: merge a small code change. The CircleCI `build-and-deploy-prod` job succeeds, and the new Cloud Run revision carries that commit's short SHA.
 
 **Acceptance Scenarios**:
 
@@ -32,7 +32,7 @@ A PR is merged into `main`. CircleCI runs a deploy job that builds and deploys t
 
 Every PR branch gets a CircleCI job that builds the Docker image, without pushing or deploying, and without any Google Cloud access. Its result shows on the PR.
 
-**Independent Test**: open a PR. The CircleCI `build-check` shows on it, and the live revision is unchanged.
+**Independent Test**: open a PR. The CircleCI `test` shows on it, and the live revision is unchanged.
 
 ### User Story 3 - Google Cloud Build automation removed (Priority: P2)
 

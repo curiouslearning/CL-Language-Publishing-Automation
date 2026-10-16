@@ -30,12 +30,12 @@
 
 ## Phase 3: User Story 2 - PR build check (P1)
 
-- [ ] T007 (user) With the user's go-ahead: commit and push branch `010-circleci-cicd`, then open a PR. CircleCI `build-check` shows on the PR and passes. Cloud Build's `ftm-pr-check` also runs until T011.
+- [X] T007 (user) With the user's go-ahead: commit and push branch `010-circleci-cicd`, then open a PR. CircleCI `test` shows on the PR and passes. Cloud Build's `ftm-pr-check` also runs until T011.
 
 ## Phase 4: User Story 1 - Deploy on merge via CircleCI (P1)
 
 - [X] T008 (cloud) Delete the Cloud Build trigger `ftm-deploy-main` **before** merging, so the merge deploys once (through CircleCI).
-- [ ] T009 (user) Merge the PR when nobody is generating. Confirm:
+- [X] T009 (user) Merge the PR when nobody is generating. Confirm:
   - CircleCI `deploy` succeeds;
   - the new revision is labeled `commit-sha=<merge sha7>`;
   - the page returns 200.
@@ -43,7 +43,7 @@
 
 ## Phase 5: User Story 3 - Remove the Cloud Build automation (P2)
 
-- [ ] T011 (cloud) Delete:
+- [X] T011 (cloud) Delete:
   - trigger `ftm-pr-check`;
   - repository link `cl-language-publishing-automation` and connection `ftm-github`;
   - SA `ftm-pr-builder`, plus its project `logging.logWriter` binding.
@@ -52,4 +52,4 @@
   - the Cloud Build service agent's `roles/secretmanager.admin`;
   - the Compute default SA's `roles/run.admin` and its `iam.serviceAccountUser` on `ftm-generator-run`.
 - [ ] T012 (user) GitHub → `curiouslearning` org Settings → GitHub Apps → **Google Cloud Build** → Uninstall, or remove this repo from it if other repos use it.
-- [ ] T013 Mark spec 010 Implemented. In GitHub branch protection for `main`, switch the required check from `ftm-pr-check` to CircleCI's `build-check`, if one was set (needs a repo admin).
+- [ ] T013 Mark spec 010 Implemented. In GitHub branch protection for `main`, switch the required check from `ftm-pr-check` to CircleCI's `test`, if one was set (needs a repo admin).
