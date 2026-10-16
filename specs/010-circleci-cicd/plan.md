@@ -61,3 +61,21 @@ cloudbuild-pr.yaml       # DELETED
 README.md, CLAUDE.md     # CircleCI setup, one-time GCP setup, rollback
 specs/009-…/spec.md      # Status: superseded
 ```
+
+## Revision 2026-10-16: aligned with FeedTheMonsterJS, and clearer logs
+
+- **Layout copied from `CuriousReader/FeedTheMonsterJS/.circleci/config.yml`:**
+  - reusable `commands:` (`gcloud-login`, `build-and-deploy`, with parameters);
+  - a `test` job on every branch;
+  - `build-and-deploy-prod` on `main` with `requires: [test]` and `context:` as a list;
+  - workflow `cloud-run-deploy-workflow`.
+
+  There's only one environment here, so there are no dev/test deploy jobs.
+- **Differences kept on purpose:**
+  - no stored keys (OIDC instead of `aws-context` keys);
+  - no orbs (the sign-in is plain `gcloud`; the deploy image is `google/cloud-sdk:slim` because it needs `gcloud`);
+  - the test job is Python: `pip install`, `compileall`, `docker build`.
+- **Logs:**
+  - every step prints ▶ … then ✅ / ⏭️ / ❌ with a one-line reason;
+  - the deploy prints Cloud Build progress per step and the full Cloud Build log (`ftm-deployer` gets `roles/logging.viewer`), and saves it as the artifact `cloudbuild/cloudbuild.log` even on failure;
+  - the final "Deploy result" step fails the job and names the failed Cloud Build step and its reason.

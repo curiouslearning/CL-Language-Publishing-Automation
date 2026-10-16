@@ -29,15 +29,16 @@ Spec-driven workflow (GitHub spec-kit, `/speckit-*` commands): project rules are
 If a secret is missing or not readable, the deploy fails and the old revision keeps serving. `.dockerignore` is an allow-list and `.gcloudignore` includes `.gitignore`: keep secrets out of both. One-time setup and deploy: README "Deploy to Cloud Run".
 
 **CI/CD (CircleCI, spec 010):** `.circleci/config.yml`.
-- **`build-check`** runs on every branch except `main`: `docker build`, nothing pushed.
-- **`deploy`** runs only on `main`, with context `ftm-language-generator-gcp`. CircleCI only issues `CIRCLE_OIDC_TOKEN` to jobs that use a context.
+- **Layout:** the same as FeedTheMonsterJS: reusable `commands:` (`gcloud-login`, `build-and-deploy`), the job `test` on every branch, and `build-and-deploy-prod` on `main` with `requires: [test]`. Workflow `cloud-run-deploy-workflow`.
+- **`test`** (`cimg/python:3.13.2`): `pip install -r requirements.txt`, `python -m compileall language_automation`, `docker build`. Nothing pushed.
+- **`build-and-deploy-prod`** (`google/cloud-sdk:slim`) runs only on `main`, with context `ftm-language-generator-gcp`. CircleCI only issues `CIRCLE_OIDC_TOKEN` to jobs that use a context.
   - It halts (`circleci-agent step halt`) when `git diff HEAD^1 HEAD` touches only `*.md`, `specs/`, `.specify/`, `.claude/` or `.github/`.
   - It signs in to Google Cloud with that OIDC token through workload identity pool `circleci` / provider `circleci-oidc`, which only accepts this CircleCI project id. It acts as `ftm-deployer`; no key is stored anywhere.
-  - It then runs `gcloud builds submit --config cloudbuild.yaml --region=us-central1 --substitutions=_COMMIT_SHA=<short sha>`.
+  - It then runs `gcloud builds submit --async` (with `--gcs-source-staging-dir=gs://ftm-language-generator_cloudbuild/source`; the default bucket needs a project-wide bucket list that `ftm-deployer` doesn't have), polls the build, prints its Cloud Build log (`gcloud logging read`, hence `roles/logging.viewer`), stores it as an artifact, and fails the job in a final "Deploy result" step that names the failed Cloud Build step.
 - **`cloudbuild.yaml`** builds and pushes to Artifact Registry repo `ftm`, then deploys as `ftm-deployer`.
   - **Newest wins:** the deploy step skips itself if the service's `ftm-build-time` label (createTime of the build that deployed it) is newer than its own build.
   - It sets the labels `ftm-build-time` and `commit-sha`.
-- **`ftm-deployer`** has: `run.admin`, `cloudbuild.builds.editor`, `logging.logWriter` and `serviceusage.serviceUsageConsumer` on the project; `iam.serviceAccountUser` on `ftm-generator-run` and on itself; `artifactregistry.writer` on repo `ftm`; `storage.admin` on bucket `ftm-language-generator_cloudbuild` only. No Secret Manager access.
+- **`ftm-deployer`** has: `run.admin`, `cloudbuild.builds.editor`, `logging.logWriter`, `logging.viewer` and `serviceusage.serviceUsageConsumer` on the project; `iam.serviceAccountUser` on `ftm-generator-run` and on itself; `artifactregistry.writer` on repo `ftm`; `storage.admin` on bucket `ftm-language-generator_cloudbuild` only. No Secret Manager access.
 - A deploy replaces the running server, so merge code when nobody is generating.
 
 **Generated packages on Cloud Run (spec 008):** `lang/` lives in the container's in-memory filesystem and counts against the 2 GiB. The page's zip download is the only way out. When `FTM_HOSTED=1`, `package_store.start_janitor` (started once via `app.package_janitor`, a `st.cache_resource`) checks every 15 s:
