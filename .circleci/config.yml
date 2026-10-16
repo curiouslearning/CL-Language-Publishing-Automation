@@ -1,0 +1,77 @@
+# CI/CD for the FTM Language Generator (spec 010), the same tool as our other projects.
+# - build-check: every branch except main (i.e. every PR) builds the Docker image. Nothing is pushed or deployed.
+# - deploy: every push/merge to main builds and deploys to Cloud Run through the existing cloudbuild.yaml
+#   (Cloud Build does the build + deploy as ftm-deployer, incl. the "newest build wins" guard).
+# Google Cloud sign-in uses CircleCI's OIDC token + workload identity federation: no key is stored in
+# CircleCI or GitHub. Nothing below is secret.
+version: 2.1
+
+jobs:
+  build-check:
+    docker:
+      - image: cimg/base:current
+    resource_class: small
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Build the image (check only, nothing pushed or deployed)
+          command: docker build -t ftm-check:${CIRCLE_SHA1:0:7} .
+
+  deploy:
+    docker:
+      - image: google/cloud-sdk:slim
+    resource_class: small
+    environment:
+      GCP_PROJECT: ftm-language-generator
+      GCP_REGION: us-central1
+      GCP_WIF_PROVIDER: //iam.googleapis.com/projects/838897084130/locations/global/workloadIdentityPools/circleci/providers/circleci-oidc
+      GCP_DEPLOY_SA: ftm-deployer@ftm-language-generator.iam.gserviceaccount.com
+    steps:
+      - checkout
+      - run:
+          name: Skip docs-only changes
+          command: |
+            CHANGED=$(git diff --name-only HEAD^1 HEAD 2>/dev/null || true)
+            echo "Changed files:"; echo "${CHANGED:-<unknown>}"
+            # Deploy unless every changed file is documentation or a spec (same rule as spec 009)
+            if [ -n "$CHANGED" ] && ! echo "$CHANGED" | grep -qvE '(\.md$|^specs/|^\.specify/|^\.claude/|^\.github/)'; then
+              echo "Only docs/specs changed: nothing to deploy."
+              circleci-agent step halt
+            fi
+      - run:
+          name: Sign in to Google Cloud (OIDC, no key)
+          command: |
+            echo "$CIRCLE_OIDC_TOKEN" > /tmp/oidc_token
+            cat > /tmp/gcp_cred.json \<<EOF
+            {
+              "type": "external_account",
+              "audience": "${GCP_WIF_PROVIDER}",
+              "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+              "token_url": "https://sts.googleapis.com/v1/token",
+              "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${GCP_DEPLOY_SA}:generateAccessToken",
+              "credential_source": {"file": "/tmp/oidc_token"}
+            }
+            EOF
+            gcloud auth login --cred-file=/tmp/gcp_cred.json --quiet
+            gcloud config set project "$GCP_PROJECT" --quiet
+      - run:
+          name: Build and deploy to Cloud Run (cloudbuild.yaml)
+          no_output_timeout: 30m
+          command: |
+            gcloud builds submit --config cloudbuild.yaml --region="$GCP_REGION" \
+              --substitutions=_COMMIT_SHA="${CIRCLE_SHA1:0:7}"
+
+workflows:
+  check-and-deploy:
+    jobs:
+      - build-check:
+          filters:
+            branches:
+              ignore: main
+      - deploy:
+          # The OIDC token is only issued to jobs that use a context
+          context: ftm-language-generator-gcp
+          filters:
+            branches:
+              only: main

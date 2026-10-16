@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-15
 
-**Status**: Draft
+**Status**: Superseded by spec 010 (CircleCI), 2026-10-16. The Cloud Build triggers were removed; `ftm-deployer` and the newest-wins guard in `cloudbuild.yaml` are kept.
 
 **Input**: User description: "Automatic deploy on merge: whenever a PR is merged into main on GitHub (curiouslearning/CL-Language-Publishing-Automation), the generator is built and deployed to Cloud Run (ftm-language-generator, us-central1) automatically using a Cloud Build GitHub trigger that runs the existing cloudbuild.yaml. Pull requests into main get an automatic build-only check (image builds, nothing deployed) whose result shows on the PR. No keys stored in GitHub. Decisions already made by the user: Cloud Build trigger (not GitHub Actions), and yes to a build-only PR check."
 

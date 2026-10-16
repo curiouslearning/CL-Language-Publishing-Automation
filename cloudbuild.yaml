@@ -1,7 +1,7 @@
 # Build the generator image and deploy it to Cloud Run (settings from spec 005, research R8).
-# Runs automatically on every code merge to main (trigger ftm-deploy-main, spec 009), and by hand from
-# the repo root:   gcloud builds submit --config cloudbuild.yaml --project=ftm-language-generator
-# One-time project setup (Artifact Registry repo, service accounts, secrets, triggers): README "Deploy to Cloud Run".
+# Run by CircleCI on every code merge to main (.circleci/config.yml, spec 010), and by hand from the
+# repo root:   gcloud builds submit --config cloudbuild.yaml --region=us-central1 --project=ftm-language-generator
+# One-time project setup (Artifact Registry repo, service accounts, secrets, CircleCI sign-in): README "Deploy to Cloud Run".
 
 # Least-privilege deploy identity (spec 009): build, push to repo ftm, deploy as the runtime account. No secret access.
 serviceAccount: projects/${PROJECT_ID}/serviceAccounts/ftm-deployer@${PROJECT_ID}.iam.gserviceaccount.com
@@ -11,6 +11,8 @@ substitutions:
   _SERVICE: ftm-language-generator
   _REPO: ftm
   _RUN_SA: ftm-generator-run
+  # Short commit SHA of what's deployed (CircleCI passes it; empty for a manual deploy). Shown as the revision label commit-sha.
+  _COMMIT_SHA: ''
   _IMAGE: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}
   # Cloud Run's address for this service. It must also be an authorized redirect URI on the web OAuth client.
   _PUBLIC_URL: https://${_SERVICE}-${PROJECT_NUMBER}.${_REGION}.run.app/
@@ -58,4 +60,4 @@ steps:
           --timeout=3600 --session-affinity \
           --set-env-vars=FTM_HOSTED=1,FTM_PUBLIC_URL=${_PUBLIC_URL},FTM_OAUTH_CLIENT_FILE=/secrets/client_secret_web.json \
           --set-secrets=/secrets/client_secret_web.json=ftm-oauth-web-client:latest,GEMINI_API_KEY=ftm-gemini-api-key:latest \
-          --update-labels=ftm-build-time=$$BUILT,commit-sha=${SHORT_SHA}
+          --update-labels=ftm-build-time=$$BUILT,commit-sha=${_COMMIT_SHA}

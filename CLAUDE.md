@@ -17,14 +17,28 @@ Spec-driven workflow (GitHub spec-kit, `/speckit-*` commands): project rules are
 - `006-ai-token-usage`: real input/output tokens and the answering model for every AI check, and the "Show tokens used" toggle.
 - `007-gemini-key-cloud-run`: Gemini is the hosted AI provider. The project's restricted key lives in Secret Manager (`ftm-gemini-api-key`) and reaches Cloud Run as `GEMINI_API_KEY`.
 - `008-language-package-download`: the generated package as a zip on the page. On the hosted page it's deleted once its page session ends.
+- `009-auto-deploy-on-merge`: deploy on merge with Google Cloud Build triggers. **Superseded by 010**; the `ftm-deployer` identity and the newest-wins guard are kept.
+- `010-circleci-cicd`: CI/CD on CircleCI, like our other projects: a build check on PRs, and deploy on merge to `main`.
 
-## Hosting (Cloud Run; AI key: spec 007)
+## Hosting (Cloud Run; AI key: spec 007; CI/CD: spec 010)
 
 `Dockerfile` + `cloudbuild.yaml` at the repo root follow spec 005 research R8: Cloud Run in `ftm-language-generator`, region `us-central1`, one instance (the lock and pending store are in-process), `--session-affinity`, `--timeout=3600`, `--allow-unauthenticated` (the page does its own sign-in). The deploy sets `FTM_HOSTED=1`, `FTM_PUBLIC_URL` (`https://<service>-<project number>.<region>.run.app/`, which must also be a redirect URI on the web OAuth client) and `FTM_OAUTH_CLIENT_FILE=/secrets/client_secret_web.json`. They're not in the image, so it can still run locally. Secrets come from Secret Manager, readable only by the runtime account `ftm-generator-run`:
 - `ftm-oauth-web-client`, mounted as a file;
 - `ftm-gemini-api-key`, set as the env var `GEMINI_API_KEY` (spec 007). It's an API key in the project, restricted to the Gemini API. `:latest` is resolved at instance start, so rotating it means a new secret version plus a redeploy.
 
 If a secret is missing or not readable, the deploy fails and the old revision keeps serving. `.dockerignore` is an allow-list and `.gcloudignore` includes `.gitignore`: keep secrets out of both. One-time setup and deploy: README "Deploy to Cloud Run".
+
+**CI/CD (CircleCI, spec 010):** `.circleci/config.yml`.
+- **`build-check`** runs on every branch except `main`: `docker build`, nothing pushed.
+- **`deploy`** runs only on `main`, with context `ftm-language-generator-gcp`. CircleCI only issues `CIRCLE_OIDC_TOKEN` to jobs that use a context.
+  - It halts (`circleci-agent step halt`) when `git diff HEAD^1 HEAD` touches only `*.md`, `specs/`, `.specify/`, `.claude/` or `.github/`.
+  - It signs in to Google Cloud with that OIDC token through workload identity pool `circleci` / provider `circleci-oidc`, which only accepts this CircleCI project id. It acts as `ftm-deployer`; no key is stored anywhere.
+  - It then runs `gcloud builds submit --config cloudbuild.yaml --region=us-central1 --substitutions=_COMMIT_SHA=<short sha>`.
+- **`cloudbuild.yaml`** builds and pushes to Artifact Registry repo `ftm`, then deploys as `ftm-deployer`.
+  - **Newest wins:** the deploy step skips itself if the service's `ftm-build-time` label (createTime of the build that deployed it) is newer than its own build.
+  - It sets the labels `ftm-build-time` and `commit-sha`.
+- **`ftm-deployer`** has: `run.admin`, `cloudbuild.builds.editor`, `logging.logWriter` and `serviceusage.serviceUsageConsumer` on the project; `iam.serviceAccountUser` on `ftm-generator-run` and on itself; `artifactregistry.writer` on repo `ftm`; `storage.admin` on bucket `ftm-language-generator_cloudbuild` only. No Secret Manager access.
+- A deploy replaces the running server, so merge code when nobody is generating.
 
 **Generated packages on Cloud Run (spec 008):** `lang/` lives in the container's in-memory filesystem and counts against the 2 GiB. The page's zip download is the only way out. When `FTM_HOSTED=1`, `package_store.start_janitor` (started once via `app.package_janitor`, a `st.cache_resource`) checks every 15 s:
 - it deletes a language folder once its owning page session has been disconnected for 60 s (`is_active_session`; a reconnect resets the wait), downloaded or not;
