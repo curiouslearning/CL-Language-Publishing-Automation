@@ -19,6 +19,7 @@ Spec-driven workflow (GitHub spec-kit, `/speckit-*` commands): project rules are
 - `008-language-package-download`: the generated package as a zip on the page. On the hosted page it's deleted once its page session ends.
 - `009-auto-deploy-on-merge`: deploy on merge with Google Cloud Build triggers. **Superseded by 010**; the `ftm-deployer` identity and the newest-wins guard are kept.
 - `010-circleci-cicd`: CI/CD on CircleCI, like our other projects: a build check on PRs, and deploy on merge to `main`.
+- `011-idle-pause`: an idle hosted page pauses after 15 minutes (`FTM_IDLE_PAUSE_MINUTES`) so its websocket closes and Cloud Run can stop billing. Never during a run in that tab.
 
 ## Hosting (Cloud Run; AI key: spec 007; CI/CD: spec 010)
 
@@ -40,6 +41,8 @@ If a secret is missing or not readable, the deploy fails and the old revision ke
   - It sets the labels `ftm-build-time` and `commit-sha`.
 - **`ftm-deployer`** has: `run.admin`, `cloudbuild.builds.editor`, `logging.logWriter`, `logging.viewer` and `serviceusage.serviceUsageConsumer` on the project; `iam.serviceAccountUser` on `ftm-generator-run` and on itself; `artifactregistry.writer` on repo `ftm`; `storage.admin` on bucket `ftm-language-generator_cloudbuild` only. No Secret Manager access.
 - A deploy replaces the running server, so merge code when nobody is generating.
+
+**Idle pause (spec 011, `idle_pause.py`):** an open tab keeps a websocket open, and Cloud Run bills while any request is open, so a forgotten tab kept the server billed all day. With `FTM_HOSTED=1` the page adds a watcher script (`idle_pause.install`, called right after `busy` is computed and in the sign-in callback tab). After `FTM_IDLE_PAUSE_MINUTES` (hosted default 15, local default 0 = off) without mouse/keyboard/touch/scroll activity, and with no run queued or running in that tab, the tab is replaced by a local `blob:` "paused" page with a Resume link, which closes the websocket. A one-minute warning shows first. The callback tab pauses after 2 minutes. Keep `<` out of the script text: Streamlit's sanitizer drops a script that looks like markup, so the paused page HTML travels in the JSON config with `<` escaped.
 
 **Generated packages on Cloud Run (spec 008):** `lang/` lives in the container's in-memory filesystem and counts against the 2 GiB. The page's zip download is the only way out. When `FTM_HOSTED=1`, `package_store.start_janitor` (started once via `app.package_janitor`, a `st.cache_resource`) checks every 15 s:
 - it deletes a language folder once its owning page session has been disconnected for 60 s (`is_active_session`; a reconnect resets the wait), downloaded or not;

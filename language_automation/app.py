@@ -13,6 +13,7 @@ from streamlit.runtime import Runtime
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 import ai_providers
+import idle_pause
 import lang_paths
 import package_store
 import web_signin
@@ -141,6 +142,9 @@ def render_signin_callback():
         kind, message = web_signin.handle_callback(
             SIGNIN_CONFIG, params, st.context.cookies.get(web_signin.COOKIE_NAME), session_alive)
         (st.success if kind == "success" else st.error)(message)
+    # This tab's job is done: let it disconnect soon so it doesn't keep the server billed (spec 011)
+    if idle_pause.idle_minutes() > 0:
+        idle_pause.install(running=False, minutes=min(idle_pause.CALLBACK_MINUTES, idle_pause.idle_minutes()))
     st.query_params.clear()  # a reload must not replay the code
     st.stop()
 
@@ -815,6 +819,8 @@ for key, default in (("history", []), ("lang_input", ""), ("last_batch", 0)):
 pending_langs = st.session_state.get("queue")
 other_run = pipeline_lock().locked() and not pending_langs  # someone else (another tab/user) is generating
 busy = bool(pending_langs) or other_run or SIGNIN_CONFIG is None
+# Idle pause (spec 011): an idle tab disconnects so Cloud Run can stop billing; never during a run here
+idle_pause.install(running=bool(pending_langs))
 
 with st.form("generate", clear_on_submit=True):  # empty the input after every Generate
     st.text_input(
