@@ -22,9 +22,18 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 steps:
+  # Reuse the layers of the image that's live now (ffmpeg, pip packages) when they haven't changed:
+  # faster builds, and each deploy adds only the changed layers to Artifact Registry instead of a
+  # whole new ~377 MB image. BUILDKIT_INLINE_CACHE stores the cache info in the image, so the cache also
+  # works when the builder uses BuildKit; the first build after this change still builds in full.
+  - id: pull-cache
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: ["-c", "docker pull ${_IMAGE}:latest || echo 'No cached image yet: building from scratch'"]
+
   - id: build
     name: gcr.io/cloud-builders/docker
-    args: ["build", "-t", "${_IMAGE}:${BUILD_ID}", "-t", "${_IMAGE}:latest", "."]
+    args: ["build", "--cache-from", "${_IMAGE}:latest", "--build-arg", "BUILDKIT_INLINE_CACHE=1", "-t", "${_IMAGE}:${BUILD_ID}", "-t", "${_IMAGE}:latest", "."]
 
   - id: push
     name: gcr.io/cloud-builders/docker
@@ -56,7 +65,7 @@ steps:
           --region=${_REGION} \
           --service-account=${_RUN_SA}@${PROJECT_ID}.iam.gserviceaccount.com \
           --allow-unauthenticated \
-          --min-instances=0 --max-instances=1 --cpu=1 --memory=2Gi \
+          --min-instances=0 --max-instances=1 --cpu=1 --memory=1Gi \
           --timeout=3600 --session-affinity \
           --set-env-vars=FTM_HOSTED=1,FTM_PUBLIC_URL=${_PUBLIC_URL},FTM_OAUTH_CLIENT_FILE=/secrets/client_secret_web.json \
           --set-secrets=/secrets/client_secret_web.json=ftm-oauth-web-client:latest,GEMINI_API_KEY=ftm-gemini-api-key:latest \
