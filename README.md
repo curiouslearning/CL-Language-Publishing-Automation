@@ -1,8 +1,27 @@
 # AI-assisted Language Publishing Automation
 
-Tooling for publishing new languages for Curious Learning's **Feed the Monster (FTM)** game. For one language, it pulls the content JSON and audio files from Google Drive into `language_automation/lang/<language>/`, cleans up unused audio, and reports missing audio. A Streamlit web page wraps the pipeline for the content team. An optional AI review checks the language content.
+Tooling for publishing new languages for Curious Learning's **Feed the Monster (FTM)** game. For one language, it pulls the content JSON and audio files from Google Drive into `language_automation/lang/<language>/`, cleans up unused audio, and reports missing audio. A web page wraps the pipeline for the content team: a React page served with its API by a small Python server (`server.py`). An open page holds no connection to the server, so the hosted service only runs (and bills) while a language is being generated. An optional AI review checks the language content.
 
 > For the full details (pipeline steps, the web page's behaviour, the AI check, gotchas), see [CLAUDE.md](CLAUDE.md). Feature specs are in [specs/](specs/) and project rules are in [.specify/memory/constitution.md](.specify/memory/constitution.md).
+
+## Version 1: live page
+
+**Live page:** https://ftm-language-generator-838897084130.us-central1.run.app/ (sign in with a `@curiouslearning.org` Google account)
+
+This is **version 1** of the automation. It covers the whole publishing process for one language, end to end, from one web page:
+
+1. Type the language name, press **Generate** and sign in with Google.
+2. The page checks that the language's sheet and audio folder exist on Drive, fetches the game JSON, downloads every audio file and converts it to mp3, fixes look-alike vowel-sign spellings, removes audio the game doesn't use and lists audio that's missing.
+3. Optionally, an AI language check flags misspelled words, letters foreign to the language, odd feedback sentences and mismatched recording names.
+4. Download the finished language package as a zip, ready for the game.
+
+**How it helps**
+
+- **One click instead of many manual steps** across Drive, the language sheet and audio tools.
+- **Nothing to install** for the content team: it runs in the browser, with no Python or ffmpeg setup.
+- **Problems show up early:** missing audio, look-alike file names and spelling issues are reported before the language reaches the game.
+- **The same result every time:** every run follows the same steps and checks and produces a clean package.
+- **Safe by design:** only curiouslearning.org accounts can use it, each run uses the signed-in person's own Drive access, and the package is deleted from the server as soon as the page has fetched it.
 
 ## Setup
 
@@ -10,7 +29,7 @@ Tooling for publishing new languages for Curious Learning's **Feed the Monster (
    ```bash
    python -m pip install -r requirements.txt
    ```
-2. Install **ffmpeg** and put it on your `PATH` (it converts non-mp3 audio to mp3).
+2. Install **ffmpeg** and put it on your `PATH` (it converts non-mp3 audio to mp3), and **Node.js 20+** (to build the web page).
 3. Put the Google OAuth client files in `language_automation/`. Ask the team for them and **never commit them** (both are gitignored):
    - `client_secret_web.json`: the **Web application** client for the web page, from the Google Cloud project `ftm-language-generator`.
    - `credentials.json`: the **desktop** client, only needed for the command line.
@@ -23,13 +42,16 @@ Run everything from inside `language_automation/`:
 ```bash
 cd language_automation
 
-python -m streamlit run app.py              # web page for the content team
+(cd web && npm ci && npm run build)        # build the web page once (and after changing web/)
+python server.py                            # web page for the content team: http://localhost:8080
 python generate_language.py Hausa           # full pipeline from the command line
 python ai_language_check.py Hausa           # optional AI review of a generated language
 ```
 
 **Signing in:** only `@curiouslearning.org` accounts are accepted.
-- **Web page:** the first Generate in a page visit shows a **Sign in with Google** button that opens Google in a new tab. Each run uses the access of the person who signed in. Nothing is saved to disk, so reloading the page asks again.
+- **Web page:** the first Generate in a page visit shows a **Sign in with Google** button that opens a Google popup. Each run uses the access of the person who signed in, and the server checks the account again for every run. The sign-in is kept only in the open page (about an hour), so reloading the page asks again.
+
+**Changing the page:** run `python server.py` and, in `language_automation/web`, `npm run dev`; open http://localhost:5173 (live reload, `/api` goes to the server on port 8080). Run `npm run build` before using http://localhost:8080 again.
 - **Command line:** the first run opens a browser to sign in, and the sign-in is cached in `token.json`. Delete that file to sign in again.
 
 The individual steps (`fetch_lang_sheet.py`, `fetch_drive_audios.py`, `check_missing_audios.py`, `fetch_unity_json.py`) can be run on their own for debugging. See [CLAUDE.md](CLAUDE.md#running-the-pipeline).
@@ -42,16 +64,17 @@ The individual steps (`fetch_lang_sheet.py`, `fetch_drive_audios.py`, `check_mis
 4. Deletes audio the JSON doesn't use, and reports audio the JSON needs but that's missing. Look-alike spellings are flagged for the team to check and are never renamed.
 5. On the web page, offers the package as a zip: **📦 Download language package (.zip)**. It contains `<language>/ftm_<language>.json`, `audios/` and `images/`.
 
-**On the hosted page, download right away.** The package is kept on the server only until you close or reload the page. After that it's deleted, whether or not it was downloaded, and you'd generate the language again from Drive. Locally, the package also stays in `language_automation/lang/<language>/`.
+**On the hosted page, download before you close the page.** Right after the run, the page fetches the package from the server and keeps it in the page; the server then deletes its copy. Closing or reloading the page loses it, and you'd generate the language again from Drive. Locally, the package also stays in `language_automation/lang/<language>/`.
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
-| `language_automation/` | Pipeline scripts, Streamlit app (`app.py`), AI check, `config.json` |
+| `language_automation/` | Pipeline scripts, web server (`server.py`), AI check, `config.json` |
+| `language_automation/web/` | The web page (React + TypeScript, built with Vite) |
 | `Dockerfile`, `cloudbuild.yaml` | Container image and Cloud Run deploy for the web page |
 | `.circleci/config.yml` | CI/CD: build check on every PR, deploy on every merge to `main` |
-| `specs/` | Spec-kit feature specs (001–010) |
+| `specs/` | Spec-kit feature specs (001–012) |
 | `.specify/`, `.claude/skills/` | Spec-kit templates, scripts and commands |
 | `CLAUDE.md` | Detailed developer and maintainer notes |
 
@@ -116,7 +139,7 @@ gcloud iam service-accounts add-iam-policy-binding $DEP --role=roles/iam.workloa
 ```
 
 Then:
-- In the Cloud Console (Google Auth Platform → Clients → the web client), add the Cloud Run address as an **authorized redirect URI**. Include the trailing slash: `https://ftm-language-generator-838897084130.us-central1.run.app/`
+- In the Cloud Console (Google Auth Platform → Clients → the web client), add these as **Authorized JavaScript origins** (no trailing slash): `https://ftm-language-generator-838897084130.us-central1.run.app`, `http://localhost:8080` and `http://localhost:5173`. The page signs in with a Google popup (spec 012); the old redirect URI isn't used any more and can be removed.
 - In CircleCI (organization `curiouslearning`):
   - set up the project from `main`, using the repo's `.circleci/config.yml`;
   - create a context named **`ftm-language-generator-gcp`** (Organization Settings → Contexts). It holds nothing secret: CircleCI only issues the OIDC token to jobs that use a context.
@@ -130,7 +153,7 @@ The project has billing enabled, so Gemini usage from this key is billed at paid
 **Roll back:** `gcloud run services update-traffic ftm-language-generator --to-revisions=<previous revision>=100 --region=us-central1 --project=ftm-language-generator`. The revisions are listed under Cloud Run → the service → Revisions. The next deploy moves traffic to the new revision again.
 
 - Secrets never go into the image or the upload. `.gcloudignore` and `.dockerignore` exclude them, and Cloud Run mounts them from Secret Manager.
-- Changing the region or the service name changes the address. Pass `--substitutions=_REGION=...` and register the new redirect URI.
+- Changing the region or the service name changes the address. Pass `--substitutions=_REGION=...` and add the new address as an Authorized JavaScript origin.
 
 ### Rotate the Gemini key
 

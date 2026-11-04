@@ -1,0 +1,23 @@
+{
+  "name": "ftm-language-generator-web",
+  "private": true,
+  "version": "1.0.0",
+  "description": "The Feed the Monster language generator page (spec 012). Built to dist/ and served by ../server.py.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.5"
+  }
+}

@@ -7,13 +7,16 @@ client_secret*.json
 .env
 .env.*
 !.env.example
-.streamlit/secrets.toml
 
 # AI language check: cached results of earlier checks
 .ai_cache/
 
 # Generated language data (JSON + hundreds of mp3s)
 lang/
+
+# The page (language_automation/web): dependencies and build output
+node_modules/
+web/dist/
 
 # Python
 .venv/
