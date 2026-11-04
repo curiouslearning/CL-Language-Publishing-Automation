@@ -13,6 +13,7 @@ language_automation/**/*.pem
 language_automation/**/*.key
 language_automation/.ai_cache/
 language_automation/lang/
-language_automation/.streamlit/secrets.toml
+language_automation/web/node_modules/
+language_automation/web/dist/
 **/__pycache__/
 **/*.py[cod]

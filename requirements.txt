@@ -1,6 +1,7 @@
 # Python dependencies for language_automation/ (install: python -m pip install -r requirements.txt)
 # System packages (not pip): ffmpeg on PATH
-streamlit==1.64.0
+fastapi==0.162.0             # web server for the page (server.py, spec 012)
+uvicorn==0.54.0
 requests==2.32.5
 google-api-python-client==2.187.0
 google-auth==2.60.0          # google-genai 2.28 needs >=2.56

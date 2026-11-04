@@ -1,4 +1,4 @@
-# Build the generator image and deploy it to Cloud Run (settings from spec 005, research R8).
+# Build the generator image (React page + Python server, spec 012) and deploy it to Cloud Run (settings from spec 005, research R8).
 # Run by CircleCI on every code merge to main (.circleci/config.yml, spec 010), and by hand from the
 # repo root:   gcloud builds submit --config cloudbuild.yaml --region=us-central1 --project=ftm-language-generator
 # One-time project setup (Artifact Registry repo, service accounts, secrets, CircleCI sign-in): README "Deploy to Cloud Run".
@@ -14,8 +14,6 @@ substitutions:
   # Short commit SHA of what's deployed (CircleCI passes it; empty for a manual deploy). Shown as the revision label commit-sha.
   _COMMIT_SHA: ''
   _IMAGE: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}
-  # Cloud Run's address for this service. It must also be an authorized redirect URI on the web OAuth client.
-  _PUBLIC_URL: https://${_SERVICE}-${PROJECT_NUMBER}.${_REGION}.run.app/
 
 options:
   dynamicSubstitutions: true
@@ -55,9 +53,11 @@ steps:
           echo "⏭️ Skipping deploy: a newer build ($$LIVE) is already live (this build: $$BUILT)"
           exit 0
         fi
-        # The page does its own curiouslearning.org sign-in (spec 005), so Cloud Run lets everyone reach it.
-        # One instance: the one-run lock, the sign-in pending store and the package registry are in-process.
-        # A run can take a while (timeout 3600); session affinity keeps one browser session on the instance.
+        # The page does its own curiouslearning.org sign-in (specs 005/012), so Cloud Run lets everyone reach it.
+        # One instance: the one-run lock and the package registry are in-process. A run is one streaming
+        # request (spec 012) that can take a while (timeout 3600). An open page holds no connection, so the
+        # service scales to zero between runs; no session affinity is needed. --cpu-throttling = request-based
+        # billing: CPU is only billed while a request (a run, a page load, a zip) is open.
         # Secrets: the web OAuth client as a file; the Gemini key (spec 007) as the env var the AI check reads.
         # :latest is resolved when an instance starts. Never put the key itself in --set-env-vars.
         gcloud run deploy ${_SERVICE} \
@@ -66,7 +66,7 @@ steps:
           --service-account=${_RUN_SA}@${PROJECT_ID}.iam.gserviceaccount.com \
           --allow-unauthenticated \
           --min-instances=0 --max-instances=1 --cpu=1 --memory=1Gi \
-          --timeout=3600 --session-affinity \
-          --set-env-vars=FTM_HOSTED=1,FTM_PUBLIC_URL=${_PUBLIC_URL},FTM_OAUTH_CLIENT_FILE=/secrets/client_secret_web.json \
+          --timeout=3600 --no-session-affinity --cpu-throttling \
+          --set-env-vars=FTM_HOSTED=1,FTM_OAUTH_CLIENT_FILE=/secrets/client_secret_web.json \
           --set-secrets=/secrets/client_secret_web.json=ftm-oauth-web-client:latest,GEMINI_API_KEY=ftm-gemini-api-key:latest \
           --update-labels=ftm-build-time=$$BUILT,commit-sha=${_COMMIT_SHA}

@@ -74,8 +74,9 @@ jobs:
           command: python -m compileall -q language_automation || { echo "❌ Python syntax error (file and line above)."; exit 1; }
       - setup_remote_docker
       - run:
+          # Also type-checks and builds the React page (Dockerfile stage "web", spec 012)
           name: Build the Docker image (nothing pushed or deployed)
-          command: docker build -t ftm-check . || { echo "❌ Docker build failed (usually requirements.txt or the Dockerfile; see above)."; exit 1; }
+          command: docker build -t ftm-check . || { echo "❌ Docker build failed (a TypeScript error in language_automation/web, requirements.txt or the Dockerfile; see above)."; exit 1; }
 
   build-and-deploy-prod:
     docker:

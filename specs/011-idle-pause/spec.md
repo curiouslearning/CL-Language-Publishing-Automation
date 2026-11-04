@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-27
 
-**Status**: Implemented
+**Status**: Superseded by [012-react-frontend](../012-react-frontend/spec.md) (2026-11-04): the React page holds no connection while idle, so there is nothing to pause. `idle_pause.py` was removed.
 
 **Input**: User description: "The server should only run when the website is being used. It shouldn't be running the whole day. Keeping the server running while nobody is using it is a problem. Fix it so that I can reduce the cost."
 

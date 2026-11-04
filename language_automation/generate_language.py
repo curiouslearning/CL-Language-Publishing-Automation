@@ -19,7 +19,7 @@ ALLOWED_DOMAIN = "curiouslearning.org"
 # -------------------------------------------
 # 🔐 Google sign-in, before anything else (google_auth: the web page's sign-in for this run,
 #    or token.json on the command line).
-#    app.py shows "Authentication in progress" until "✅ Authenticated as" is printed.
+#    The web page (web/src/runParser.ts) shows "Authentication in progress" until "✅ Authenticated as" is printed.
 # -------------------------------------------
 def authenticate():
     print("🔐 Authenticating with Google...")

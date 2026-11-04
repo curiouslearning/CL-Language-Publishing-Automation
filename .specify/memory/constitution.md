@@ -1,5 +1,16 @@
 <!--
 Sync Impact Report
+- Version change: 2.0.0 → 2.1.0 (MINOR: the web page moved from Streamlit to React + FastAPI, spec 012, 2026-11-04)
+- Modified sections:
+  - IV. Stable Log Contract: the consumer of the prefixes is now the web page's parser
+    `language_automation/web/src/runParser.ts` instead of `app.py`. Same prefixes, same rule.
+  - Technical Constraints → Stack: `fastapi` + `uvicorn` replace `streamlit`; the page is built with
+    Node/npm (build time only, not needed to run the pipeline).
+  - Development Workflow: the manual check confirms the web page summary (no longer "Streamlit").
+- Templates requiring updates: none
+- Deferred TODOs: none
+
+Previous report:
 - Version change: 1.0.1 → 2.0.0 (MAJOR: principle III redefined at the user's request, 2026-10-06)
 - Modified principles:
   - III. The Game JSON Is the Source of Truth for Audio: near-matches are now **warned about, never
@@ -61,10 +72,10 @@ clear warning gets it fixed in the sheet or on Drive.
 
 ### IV. Stable, Human-Readable Log Contract
 
-Pipeline scripts communicate with the Streamlit UI (`app.py`) through stdout lines with emoji
-prefixes. The prefixes `🗑 Deleted:`, `🔍 Look-alike:`, `❌ Missing audio files:`, and
+Pipeline scripts communicate with the web page (`language_automation/web/src/runParser.ts`, which
+receives them through `server.py`) through stdout lines with emoji prefixes. The prefixes `🗑 Deleted:`, `🔍 Look-alike:`, `❌ Missing audio files:`, and
 `✔ Audio cleanup completed` are a public contract. Changing or removing one MUST include a
-matching change to `app.py` in the same change. New user-facing steps SHOULD use the same style
+matching change to `runParser.ts` in the same change. New user-facing steps SHOULD use the same style
 so the UI can show them.
 
 Rationale: the content team relies on the UI and does not read raw logs. A silently changed
@@ -83,7 +94,9 @@ NOT repeat that pattern.
 ## Technical Constraints
 
 - **Stack**: standalone Python 3 scripts. Only `google-api-python-client`,
-  `google-auth-oauthlib`, `requests`, `streamlit`, and `ffmpeg` on PATH are required. Adding a
+  `google-auth-oauthlib`, `requests`, `fastapi` + `uvicorn` (the web server), and `ffmpeg` on PATH are
+  required. The web page (`language_automation/web/`, React + TypeScript) is built with Node/npm;
+  Node is not needed to run the pipeline or the built server. Adding a
   dependency MUST be justified in the feature's `plan.md`.
 - **Execution**: pipeline scripts run from inside `language_automation/` and use CWD-relative
   paths. New scripts MUST follow the same convention or resolve paths from `__file__`
@@ -104,7 +117,7 @@ NOT repeat that pattern.
   live in `specs/<NNN-feature>/`.
 - There is no automated test suite. Each feature's `tasks.md` MUST include a manual verification
   task. That task runs the pipeline against at least one real language (e.g. `Hausa`) and
-  confirms the `check_missing_audios` output and the Streamlit summary.
+  confirms the `check_missing_audios` output and the web page summary.
 - When a pipeline step, ordering, or log prefix changes, `CLAUDE.md` MUST be updated in the same
   change.
 - Small fixes (typos, a one-line bug) MAY skip Spec Kit. They still MUST respect every principle
@@ -121,4 +134,4 @@ versioned semantically. MAJOR means a principle is removed or redefined. MINOR m
 or section is added or materially expanded. PATCH means clarifications only. `CLAUDE.md` remains
 the runtime guidance for how the code works. This file governs how changes are made.
 
-**Version**: 2.0.0 | **Ratified**: 2026-10-05 | **Last Amended**: 2026-10-06
+**Version**: 2.1.0 | **Ratified**: 2026-10-05 | **Last Amended**: 2026-11-04

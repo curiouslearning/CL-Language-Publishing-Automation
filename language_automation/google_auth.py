@@ -2,6 +2,8 @@
 Google credentials for the pipeline scripts (spec 005, contracts/pipeline-credentials.md).
 
 1. FTM_GOOGLE_CREDENTIALS: the web page's sign-in for this run (JSON). Used as is, never saved.
+   Spec 012: the page's Google popup gives only an access token, {"token": "..."}; it is used
+   without a refresh token (it lasts about an hour, longer than a run).
 2. FTM_HOSTED=1 without it: refused. A server never falls back to token.json.
 3. Otherwise (developer command line): token.json, or the desktop sign-in with credentials.json.
 """
@@ -12,10 +14,11 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
-# Asked for by the web sign-in (web_signin.py): the ID token proves the account's email and organization
+# Asked for by the page's Google popup (spec 012, web/src/googleSignin.ts); server.py checks the
+# account's email and organization with the userinfo endpoint before a run
 WEB_SCOPES = [
     "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
+    "email",
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/spreadsheets.readonly",
 ]
@@ -47,10 +50,15 @@ def load_credentials():
     raw = os.environ.get(CREDENTIALS_ENV)
     if raw:
         try:
-            # scopes=None: keep exactly the scopes this sign-in was granted
-            creds = Credentials.from_authorized_user_info(json.loads(raw))
-            if not creds.valid:
-                creds.refresh(Request())
+            info = json.loads(raw)
+            if set(info) == {"token"}:
+                # Access token only (spec 012): can't be refreshed, and doesn't need to be
+                creds = Credentials(token=info["token"])
+            else:
+                # scopes=None: keep exactly the scopes this sign-in was granted
+                creds = Credentials.from_authorized_user_info(info)
+                if not creds.valid:
+                    creds.refresh(Request())
         except Exception:
             raise AuthError("the Google sign-in for this run is invalid or expired") from None
         return creds
